@@ -27,6 +27,17 @@ pub struct AppConfig {
     pub download_dir: String,
     /// 主题："light" 或 "dark"。
     pub theme: String,
+    /// 是否自动接收图片（F34，默认开启）。
+    #[serde(default = "default_true")]
+    pub auto_accept_images: bool,
+    /// 是否自动接收普通文件（F34/F52，默认关闭，需用户确认）。
+    #[serde(default)]
+    pub auto_accept_files: bool,
+}
+
+/// serde 默认值：true（用于旧配置缺字段时保持图片自动接收）。
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AppConfig {
@@ -38,6 +49,8 @@ impl Default for AppConfig {
             tcp_port: DEFAULT_TCP_PORT,
             download_dir: default_download_dir(),
             theme: "light".to_string(),
+            auto_accept_images: true,
+            auto_accept_files: false,
         }
     }
 }

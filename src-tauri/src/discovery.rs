@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
@@ -165,6 +165,13 @@ pub enum DiscoveryEvent {
     DeviceBye(String),
 }
 
+/// 受限广播地址（255.255.255.255）上的指定端口。
+///
+/// 纯函数，便于测试；端口必须与监听端口一致，否则对端收不到广播。
+pub fn broadcast_addr(port: u16) -> SocketAddr {
+    SocketAddr::from((Ipv4Addr::BROADCAST, port))
+}
+
 /// 启动发现服务：绑定 UDP 端口，广播 announce/query，回应 query。
 ///
 /// `local_device_id`/`local_name` 用于本机 announce 包；
@@ -198,9 +205,8 @@ pub async fn start_discovery(
             &local_name,
             tcp_port,
         );
-        let bye = DiscoveryPacket::new(DiscoveryType::Bye, &local_device_id, &local_name, tcp_port);
-        // 发送目标：255.255.255.255 广播
-        let broadcast_addr: SocketAddr = "255.255.255.255:28100".parse().unwrap();
+        // 发送目标：受限广播地址 + 本机监听端口（端口必须与 bind 一致）。
+        let broadcast_addr = broadcast_addr(bind_port);
 
         let _ = socket.send_to(&query.encode(), broadcast_addr).await;
         let _ = socket.send_to(&ann.encode(), broadcast_addr).await;
@@ -237,7 +243,6 @@ pub async fn start_discovery(
                 else => break,
             }
         }
-        let _ = bye; // 循环退出时理论上可发送 bye（当前常驻运行）
     });
 
     Ok((rx, handle))
@@ -291,6 +296,38 @@ mod tests {
         let addr: SocketAddr = "192.168.1.10:5000".parse().unwrap();
         table.upsert(&p, addr);
         assert_eq!(table.remove("id-1").unwrap().device_id, "id-1");
+        assert!(table.is_empty());
+    }
+
+    /// 边界：广播地址端口必须跟随配置端口，而不是硬编码 28100。
+    #[test]
+    fn broadcast_addr_follows_configured_port() {
+        assert_eq!(broadcast_addr(28100).to_string(), "255.255.255.255:28100");
+        assert_eq!(broadcast_addr(39000).to_string(), "255.255.255.255:39000");
+    }
+
+    /// 异常：协议版本不一致的包被过滤（避免与 v2 客户端互相污染）。
+    #[test]
+    fn decode_wrong_version_filtered() {
+        let mut p = DiscoveryPacket::new(DiscoveryType::Announce, "id-1", "PC-abc", 28101);
+        p.ver = PROTOCOL_VERSION + 1;
+        assert!(DiscoveryPacket::decode(&p.encode()).is_none());
+    }
+
+    /// 边界：超时设备被 sweep 移除，返回离线列表。
+    #[test]
+    fn device_table_sweep_offline_removes_stale() {
+        let mut table = DeviceTable::default();
+        let p = DiscoveryPacket::new(DiscoveryType::Announce, "id-1", "PC-abc", 28101);
+        let addr: SocketAddr = "192.168.1.10:5000".parse().unwrap();
+        table.upsert(&p, addr);
+        // 手动把 last_seen 回拨到离线阈值之外。
+        if let Some(entry) = table.devices.get_mut("id-1") {
+            entry.last_seen = Instant::now() - OFFLINE_AFTER - Duration::from_secs(1);
+        }
+        let offline = table.sweep_offline();
+        assert_eq!(offline.len(), 1);
+        assert_eq!(offline[0].device_id, "id-1");
         assert!(table.is_empty());
     }
 }

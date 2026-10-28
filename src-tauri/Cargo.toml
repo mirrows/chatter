@@ -1,6 +1,6 @@
 [package]
 name = "chatters"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 description = "LAN P2P transfer tool for text, images and files"
 edition = "2021"
 
@@ -12,7 +12,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
@@ -24,6 +24,20 @@ uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10"
 log = "0.4"
 env_logger = "0.11"
+
+# 集成测试放在 tests/<module>/<feature>.rs（rules.md R2.2）；
+# Cargo 只自动发现 tests/ 根目录下的文件，因此子目录需显式登记。
+[[test]]
+name = "discovery_service"
+path = "tests/discovery/discovery_service.rs"
+
+[[test]]
+name = "text_messaging"
+path = "tests/session/text_messaging.rs"
+
+[[test]]
+name = "file_transfer"
+path = "tests/transfer/file_transfer.rs"
 
 [profile.release]
 strip = true
