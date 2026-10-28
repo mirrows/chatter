@@ -446,17 +446,30 @@ pub async fn get_history(
     })
 }
 
-/// 清空历史（F40/F41）：`peer_id` 为空时清空全部。
+/// 清空历史（F40/F41）：`peer_id` 为空时清空全部；`delete_files` 为 true 时删除下载目录内的历史文件。
 #[tauri::command]
 pub async fn clear_history(
     state: tauri::State<'_, AppState>,
     peer_id: Option<String>,
-) -> Result<(), String> {
-    state
-        .history
-        .clear(peer_id.as_deref())
-        .await
-        .map_err(|e| e.to_string())
+    delete_files: Option<bool>,
+) -> Result<usize, String> {
+    let peer = peer_id.as_deref();
+    let mut removed = 0usize;
+    if delete_files.unwrap_or(false) {
+        let base = {
+            let config = state.config.read().await;
+            PathBuf::from(&config.download_dir)
+        };
+        let records = state.history.transfers_for(peer).await;
+        let paths: Vec<String> = records
+            .into_iter()
+            .filter(|record| record.direction == "receive")
+            .filter_map(|record| record.path)
+            .collect();
+        removed = delete_files_under(&base, &paths).await;
+    }
+    state.history.clear(peer).await.map_err(|e| e.to_string())?;
+    Ok(removed)
 }
 
 /// 是否已开启开机自启（F50）。
@@ -642,7 +655,7 @@ pub async fn get_image_preview(
     state: tauri::State<'_, AppState>,
     transfer_id: String,
 ) -> Result<String, String> {
-    const MAX_PREVIEW_BYTES: u64 = 8 * 1024 * 1024;
+    const MAX_PREVIEW_BYTES: u64 = 20 * 1024 * 1024;
     let info = state
         .transfers
         .get(&transfer_id)
@@ -869,6 +882,146 @@ pub fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// 解析已完成传输的落盘路径（F23）。
+async fn received_file_path(state: &AppState, transfer_id: &str) -> Result<PathBuf, String> {
+    let info = state
+        .transfers
+        .get(transfer_id)
+        .await
+        .ok_or_else(|| format!("unknown transfer: {transfer_id}"))?;
+    let raw = info.path.ok_or_else(|| "文件尚未接收完成".to_string())?;
+    let path = PathBuf::from(raw);
+    if !path.is_file() {
+        return Err("文件不存在或已被移动".to_string());
+    }
+    Ok(path)
+}
+
+/// 用系统默认程序打开文件（F23）。
+fn open_command(path: &Path) -> std::process::Command {
+    #[cfg(target_os = "windows")]
+    {
+        let mut command = std::process::Command::new("cmd");
+        command.arg("/C").arg("start").arg("").arg(path);
+        command
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut command = std::process::Command::new("open");
+        command.arg(path);
+        command
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(path);
+        command
+    }
+}
+
+/// 在文件管理器中定位文件（F23）。
+fn reveal_command(path: &Path) -> std::process::Command {
+    #[cfg(target_os = "windows")]
+    {
+        let mut command = std::process::Command::new("explorer");
+        let mut arg = std::ffi::OsString::from("/select,");
+        arg.push(path);
+        command.arg(arg);
+        command
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut command = std::process::Command::new("open");
+        command.arg("-R").arg(path);
+        command
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(path.parent().unwrap_or(path));
+        command
+    }
+}
+
+/// 用默认程序打开已接收的文件（F23）。
+#[tauri::command]
+pub async fn open_transfer_file(
+    state: tauri::State<'_, AppState>,
+    transfer_id: String,
+) -> Result<(), String> {
+    let path = received_file_path(&state, &transfer_id).await?;
+    open_command(&path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("无法打开文件：{e}"))
+}
+
+/// 在资源管理器中定位已接收的文件（F23）。
+#[tauri::command]
+pub async fn reveal_transfer_file(
+    state: tauri::State<'_, AppState>,
+    transfer_id: String,
+) -> Result<(), String> {
+    let path = received_file_path(&state, &transfer_id).await?;
+    reveal_command(&path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("无法打开文件夹：{e}"))
+}
+
+/// 另存为：选择目标路径后复制文件（F23），取消时返回 null。
+#[tauri::command]
+pub async fn save_transfer_as(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    transfer_id: String,
+) -> Result<Option<String>, String> {
+    let source = received_file_path(&state, &transfer_id).await?;
+    let default_name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("chatters-file")
+        .to_string();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_file_name(default_name)
+        .save_file(move |picked| {
+            let _ = tx.send(picked);
+        });
+    let picked = rx.await.map_err(|_| "保存对话框已关闭".to_string())?;
+    match picked {
+        Some(file) => {
+            let target = file.into_path().map_err(|e| e.to_string())?;
+            tokio::fs::copy(&source, &target)
+                .await
+                .map_err(|e| format!("保存失败：{e}"))?;
+            Ok(Some(target.to_string_lossy().to_string()))
+        }
+        None => Ok(None),
+    }
+}
+
+/// 删除下载目录内的历史文件（F41）：只删除确实存在且位于下载目录内的文件。
+pub async fn delete_files_under(base: &Path, paths: &[String]) -> usize {
+    let Ok(base) = tokio::fs::canonicalize(base).await else {
+        return 0;
+    };
+    let mut removed = 0usize;
+    for raw in paths {
+        let Ok(target) = tokio::fs::canonicalize(raw).await else {
+            continue;
+        };
+        if !target.starts_with(&base) {
+            continue;
+        }
+        if tokio::fs::remove_file(&target).await.is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1081,6 +1234,65 @@ mod tests {
         assert!(parse_manual_addr("   ", 28101).is_err());
         assert!(parse_manual_addr("not-an-ip", 28101).is_err());
         assert!(parse_manual_addr("999.1.1.1", 28101).is_err());
+    }
+
+    /// 正常路径：打开/定位命令选择系统默认程序（F23）。
+    #[test]
+    fn file_commands_use_platform_defaults() {
+        let path = Path::new("C:/tmp/report.pdf");
+        let open = open_command(path);
+        let reveal = reveal_command(path);
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(open.get_program().to_string_lossy(), "cmd");
+            assert_eq!(reveal.get_program().to_string_lossy(), "explorer");
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(open.get_program().to_string_lossy(), "open");
+            assert_eq!(reveal.get_program().to_string_lossy(), "open");
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            assert_eq!(open.get_program().to_string_lossy(), "xdg-open");
+            assert_eq!(reveal.get_program().to_string_lossy(), "xdg-open");
+        }
+    }
+
+    /// 正常路径：只删除下载目录内的文件（F41 安全约束）。
+    #[tokio::test]
+    async fn delete_files_under_respects_base_dir() {
+        let root = std::env::temp_dir().join("chatters_delete_under_test");
+        let inside = root.join("inside.txt");
+        let outside = std::env::temp_dir().join("chatters_outside_delete.txt");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&inside, b"x").unwrap();
+        std::fs::write(&outside, b"x").unwrap();
+
+        let removed = delete_files_under(
+            &root,
+            &[
+                inside.to_string_lossy().to_string(),
+                outside.to_string_lossy().to_string(),
+            ],
+        )
+        .await;
+
+        assert_eq!(removed, 1, "只应删除下载目录内的文件");
+        assert!(!inside.exists());
+        assert!(outside.exists(), "下载目录外的文件必须保留");
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_file(&outside).ok();
+    }
+
+    /// 异常：目录不存在或路径失效时不 panic，返回 0。
+    #[tokio::test]
+    async fn delete_files_under_handles_missing_paths() {
+        let missing_base = std::env::temp_dir().join("chatters_no_such_base_dir");
+        let removed =
+            delete_files_under(&missing_base, &["C:/definitely/not/here.txt".to_string()]).await;
+        assert_eq!(removed, 0);
     }
 
     /// 正常路径：传输 DTO 字段为 camelCase、枚举为小写字符串（前端依赖）。

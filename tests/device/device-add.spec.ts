@@ -23,6 +23,7 @@ vi.mock("../../src/api/tauri", () => ({
 
 // 必须在 mock 之后导入被测模块。
 import DeviceList from "../../src/views/DeviceList.vue";
+import { useChatStore } from "../../src/stores/chat";
 import { useDeviceStore } from "../../src/stores/devices";
 
 const peer: DeviceEntry = {
@@ -100,5 +101,15 @@ describe("device add & notice", () => {
     store.applyUpdate({ kind: "up", device: peer });
     const wrapper = mount(DeviceList);
     expect(wrapper.get('[data-testid="device-notice"]').text()).toBe("PC-8f3a 已上线");
+  });
+
+  it("未读消息在设备列表显示徽标（F42）", async () => {
+    const devices = useDeviceStore();
+    devices.upsert(peer);
+    const chat = useChatStore();
+    chat.unread[peer.deviceId] = 3;
+
+    const wrapper = mount(DeviceList);
+    expect(wrapper.get('[data-testid="device-unread"]').text()).toBe("3");
   });
 });

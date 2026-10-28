@@ -98,15 +98,28 @@ describe("Settings view", () => {
   });
 
   it("清空历史按钮调用命令并显示提示", async () => {
-    api.clearHistory.mockResolvedValue(undefined);
+    api.clearHistory.mockResolvedValue(0);
     const wrapper = mount(Settings);
     await flushPromises();
 
     await wrapper.get('[data-testid="settings-clear-history"]').trigger("click");
     await flushPromises();
 
-    expect(api.clearHistory).toHaveBeenCalled();
+    expect(api.clearHistory).toHaveBeenCalledWith(undefined, false);
     expect(wrapper.find('[data-testid="settings-history-cleared"]').exists()).toBe(true);
+  });
+
+  it("勾选同时删除文件后清空历史会带上标记并显示删除数量（F41）", async () => {
+    api.clearHistory.mockResolvedValue(2);
+    const wrapper = mount(Settings);
+    await flushPromises();
+
+    await wrapper.get('[data-testid="settings-delete-files"]').setValue(true);
+    await wrapper.get('[data-testid="settings-clear-history"]').trigger("click");
+    await flushPromises();
+
+    expect(api.clearHistory).toHaveBeenCalledWith(undefined, true);
+    expect(wrapper.get('[data-testid="settings-history-cleared"]').text()).toContain("2");
   });
 
   it("后端报错时显示错误信息", async () => {

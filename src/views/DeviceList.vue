@@ -26,6 +26,9 @@
     <ul v-if="store.count > 0">
       <li v-for="d in store.devices" :key="d.deviceId" data-testid="device-item">
         <span class="name">{{ d.name }}</span>
+        <span v-if="chat.unreadFor(d.deviceId) > 0" class="badge" data-testid="device-unread">
+          {{ chat.unreadFor(d.deviceId) }}
+        </span>
         <span class="muted">{{ d.addr }}</span>
         <button class="link" data-testid="device-open" @click="emit('select', d)">
           {{ t("device.open") }}
@@ -40,11 +43,13 @@
 import { onUnmounted, ref, watch } from "vue";
 import { t } from "../i18n";
 import type { DeviceEntry } from "../api/types";
+import { useChatStore } from "../stores/chat";
 import { useDeviceStore } from "../stores/devices";
 
 const emit = defineEmits<{ select: [device: DeviceEntry] }>();
 
 const store = useDeviceStore();
+const chat = useChatStore();
 const addrInput = ref("");
 let noticeTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -115,6 +120,13 @@ li {
   color: var(--accent);
   font-size: 13px;
   margin: 0 0 8px;
+}
+.badge {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 12px;
 }
 .add {
   display: flex;

@@ -83,6 +83,11 @@
       {{ t("settings.autostart") }}
     </label>
 
+    <label class="check">
+      <input v-model="store.deleteFiles" type="checkbox" data-testid="settings-delete-files" />
+      {{ t("settings.deleteFiles") }}
+    </label>
+
     <div class="actions">
       <button data-testid="settings-save" :disabled="store.saving" @click="save">
         {{ t("settings.save") }}
@@ -96,7 +101,11 @@
       </button>
     </div>
     <p v-if="store.notice === 'historyCleared'" class="ok" data-testid="settings-history-cleared">
-      {{ t("settings.historyCleared") }}
+      {{
+        store.lastRemovedFiles > 0
+          ? t("settings.historyClearedWithFiles", { count: store.lastRemovedFiles })
+          : t("settings.historyCleared")
+      }}
     </p>
   </section>
 </template>

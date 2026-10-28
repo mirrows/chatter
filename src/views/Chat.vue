@@ -23,6 +23,9 @@
         >
           {{ t("chat.attachFile") }}
         </button>
+        <button class="link" data-testid="chat-clear" @click="clearConversation">
+          {{ t("chat.clearHistory") }}
+        </button>
       </div>
     </header>
 
@@ -41,6 +44,8 @@
       {{ t("chat.pasteFailed", { reason: pasteError }) }}
     </p>
 
+    <p v-if="cleared" class="ok" data-testid="chat-cleared">{{ t("chat.cleared") }}</p>
+
     <section v-if="peerTransfers.length > 0" class="transfers">
       <TransferCard
         v-for="item in peerTransfers"
@@ -51,6 +56,9 @@
         @reject="transfers.reject"
         @cancel="transfers.cancel"
         @retry="transfers.retry"
+        @open="transfers.openFile"
+        @reveal="transfers.revealFile"
+        @save-as="transfers.saveAs"
       />
     </section>
 
@@ -103,7 +111,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import TransferCard from "../components/TransferCard.vue";
-import { isTauri, saveClipboardImage } from "../api/tauri";
+import { clearHistory, isTauri, saveClipboardImage } from "../api/tauri";
 import { t, type MessageKey } from "../i18n";
 import { copyText } from "../utils/clipboard";
 import { imageFileFromItems, readFileAsBase64 } from "../utils/paste";
@@ -118,6 +126,7 @@ const transfers = useTransferStore();
 const draft = ref("");
 const copiedId = ref("");
 const pasteError = ref("");
+const cleared = ref(false);
 let unlistenDrop: UnlistenFn | null = null;
 
 /** 发送状态 → i18n key（避免动态拼接 key 丢失类型检查）。 */
@@ -174,8 +183,21 @@ async function onPaste(event: ClipboardEvent) {
   }
 }
 
-// 打开会话时载入历史（F40），并订阅拖拽发送（F22/F31）。
+/** 清空本会话语义（F40）：删除该对端历史记录并清空本地消息/任务。 */
+async function clearConversation() {
+  try {
+    await clearHistory(props.peerId);
+    store.clearPeer(props.peerId);
+    transfers.clearPeer(props.peerId);
+    cleared.value = true;
+  } catch (err) {
+    store.error = err instanceof Error ? err.message : String(err);
+  }
+}
+
+// 打开会话时载入历史（F40）、清除未读（F42），并订阅拖拽发送（F22/F31）。
 onMounted(async () => {
+  store.markRead(props.peerId);
   void store.loadHistory(props.peerId);
   void transfers.loadHistory(props.peerId);
   if (!isTauri()) return;
@@ -281,9 +303,14 @@ h2 {
   text-decoration: underline;
 }
 .empty,
-.error {
+.error,
+.ok {
   color: var(--muted);
   margin: 0;
+}
+.ok {
+  color: #15803d;
+  font-size: 13px;
 }
 .error {
   color: #c2410c;

@@ -102,6 +102,13 @@ pub fn run() -> Result<(), tauri::Error> {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        // 关闭窗口时最小化到托盘（F51）；真正退出走托盘菜单。
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let config_path = config_dir.join("config.json");
@@ -322,7 +329,10 @@ pub fn run() -> Result<(), tauri::Error> {
             commands::set_autostart,
             commands::add_device_by_ip,
             commands::save_clipboard_image,
-            commands::send_paths
+            commands::send_paths,
+            commands::open_transfer_file,
+            commands::reveal_transfer_file,
+            commands::save_transfer_as
         ])
         .run(tauri::generate_context!())
 }

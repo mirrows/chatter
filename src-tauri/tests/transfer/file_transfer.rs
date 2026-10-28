@@ -102,7 +102,18 @@ async fn wait_state(
     transfer_id: &str,
     wanted: TransferState,
 ) -> TransferInfo {
-    for _ in 0..200 {
+    wait_state_within(manager, transfer_id, wanted, Duration::from_secs(5)).await
+}
+
+/// 轮询等待（可指定超时，供大文件基准使用）。
+async fn wait_state_within(
+    manager: &TransferManager,
+    transfer_id: &str,
+    wanted: TransferState,
+    limit: Duration,
+) -> TransferInfo {
+    let deadline = std::time::Instant::now() + limit;
+    while std::time::Instant::now() < deadline {
         if let Some(info) = manager.get(transfer_id).await {
             if info.state == wanted {
                 return info;
@@ -531,6 +542,69 @@ async fn sending_directory_is_rejected() {
         .await
         .expect_err("directory must be rejected");
     assert!(matches!(error, TransferError::SourceNotFile(_)));
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// 大文件吞吐基准（默认忽略，P1 验证用）：
+/// `cargo test --offline --test file_transfer -- --ignored --nocapture throughput`
+#[tokio::test]
+#[ignore = "benchmark: run manually with --ignored --nocapture"]
+async fn throughput_256mb() {
+    const SIZE: usize = 256 * 1024 * 1024;
+    let root = temp_root("bench");
+    let dir_a = root.join("a");
+    let dir_b = root.join("b");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
+
+    let (manager_a, _hub_a, port_a) = spawn_node("device-a", "PC-a", dir_a.clone()).await;
+    let (manager_b, hub_b, _port_b) = spawn_node("device-b", "PC-b", dir_b.clone()).await;
+    hub_b.connect(loopback(port_a)).await.expect("connect a");
+
+    let source = dir_b.join("bench.bin");
+    std::fs::write(&source, vec![0xABu8; SIZE]).unwrap();
+
+    let started = std::time::Instant::now();
+    let sent = manager_b
+        .send_file("device-a", &source)
+        .await
+        .expect("send benchmark file");
+    // .bin 属于普通文件，需要接收端确认（F34）。
+    wait_state_within(
+        &manager_a,
+        &sent.transfer_id,
+        TransferState::Pending,
+        Duration::from_secs(10),
+    )
+    .await;
+    manager_a
+        .accept(&sent.transfer_id)
+        .await
+        .expect("accept benchmark file");
+    wait_state_within(
+        &manager_a,
+        &sent.transfer_id,
+        TransferState::Done,
+        Duration::from_secs(180),
+    )
+    .await;
+    wait_state_within(
+        &manager_b,
+        &sent.transfer_id,
+        TransferState::Done,
+        Duration::from_secs(180),
+    )
+    .await;
+    let elapsed = started.elapsed();
+
+    let mib = SIZE as f64 / (1024.0 * 1024.0);
+    println!(
+        "throughput: {:.1} MiB/s ({} MiB in {:.2}s, includes sha256 pre-hash)",
+        mib / elapsed.as_secs_f64(),
+        mib,
+        elapsed.as_secs_f64()
+    );
 
     std::fs::remove_dir_all(&root).ok();
 }

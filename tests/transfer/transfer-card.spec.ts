@@ -83,6 +83,35 @@ describe("TransferCard", () => {
     expect(wrapper.find('[data-testid="transfer-retry"]').exists()).toBe(false);
   });
 
+  it("已完成的接收任务显示打开/定位/另存为按钮（F23）", async () => {
+    const wrapper = mount(TransferCard, {
+      props: {
+        transfer: transfer({
+          direction: "receive",
+          kind: "file",
+          state: "done",
+          transferred: 200,
+          path: "C:/dl/a.zip",
+        }),
+      },
+    });
+
+    await wrapper.get('[data-testid="transfer-open"]').trigger("click");
+    await wrapper.get('[data-testid="transfer-reveal"]').trigger("click");
+    await wrapper.get('[data-testid="transfer-save-as"]').trigger("click");
+
+    expect(wrapper.emitted("open")).toEqual([["t-1"]]);
+    expect(wrapper.emitted("reveal")).toEqual([["t-1"]]);
+    expect(wrapper.emitted("saveAs")).toEqual([["t-1"]]);
+  });
+
+  it("发送方向完成的任务不显示打开/另存为", () => {
+    const wrapper = mount(TransferCard, {
+      props: { transfer: transfer({ direction: "send", state: "done", transferred: 200 }) },
+    });
+    expect(wrapper.find('[data-testid="transfer-open"]').exists()).toBe(false);
+  });
+
   it("零字节任务完成时按 100% 显示，不出现除零", () => {
     const wrapper = mount(TransferCard, {
       props: { transfer: transfer({ size: 0, transferred: 0, state: "done" }) },

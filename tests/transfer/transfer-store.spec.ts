@@ -14,6 +14,9 @@ const api = vi.hoisted(() => ({
   getImagePreview: vi.fn(),
   retryTransfer: vi.fn(),
   sendPaths: vi.fn(),
+  openTransferFile: vi.fn(),
+  revealTransferFile: vi.fn(),
+  saveTransferAs: vi.fn(),
   isTauri: vi.fn(),
 }));
 
@@ -29,6 +32,9 @@ vi.mock("../../src/api/tauri", () => ({
   retryTransfer: api.retryTransfer,
   getImagePreview: api.getImagePreview,
   sendPaths: api.sendPaths,
+  openTransferFile: api.openTransferFile,
+  revealTransferFile: api.revealTransferFile,
+  saveTransferAs: api.saveTransferAs,
   isTauri: api.isTauri,
 }));
 
@@ -175,6 +181,41 @@ describe("transfer store", () => {
     const store = useTransferStore();
     await expect(store.sendPaths("peer-1", [])).resolves.toEqual([]);
     expect(api.sendPaths).not.toHaveBeenCalled();
+  });
+
+  it("已完成文件可打开/定位/另存为（F23）", async () => {
+    api.openTransferFile.mockResolvedValue(undefined);
+    api.revealTransferFile.mockResolvedValue(undefined);
+    api.saveTransferAs.mockResolvedValue("C:/desk/photo.png");
+    const store = useTransferStore();
+
+    await store.openFile("t-1");
+    await store.revealFile("t-1");
+    await expect(store.saveAs("t-1")).resolves.toBe("C:/desk/photo.png");
+
+    expect(api.openTransferFile).toHaveBeenCalledWith("t-1");
+    expect(api.revealTransferFile).toHaveBeenCalledWith("t-1");
+    expect(api.saveTransferAs).toHaveBeenCalledWith("t-1");
+  });
+
+  it("打开/另存为失败时记录错误", async () => {
+    api.openTransferFile.mockRejectedValue(new Error("文件不存在或已被移动"));
+    api.saveTransferAs.mockRejectedValue(new Error("保存失败"));
+    const store = useTransferStore();
+
+    await store.openFile("t-1");
+    expect(store.error).toBe("文件不存在或已被移动");
+
+    await expect(store.saveAs("t-1")).resolves.toBeNull();
+    expect(store.error).toBe("保存失败");
+  });
+
+  it("clearPeer 只清除该对端任务", () => {
+    const store = useTransferStore();
+    store.upsert(transfer({ transferId: "t-1", peerId: "peer-1" }));
+    store.upsert(transfer({ transferId: "t-2", peerId: "peer-2" }));
+    store.clearPeer("peer-1");
+    expect(store.items.map((item) => item.transferId)).toEqual(["t-2"]);
   });
 
   it("loadPreview 只取一次并缓存", async () => {

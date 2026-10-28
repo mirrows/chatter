@@ -8,9 +8,12 @@ import {
   isTauri,
   listTransfers,
   onTransferUpdate,
+  openTransferFile,
   pickFile,
   rejectFile,
   retryTransfer,
+  revealTransferFile,
+  saveTransferAs,
   sendFile,
   sendPaths,
 } from "../api/tauri";
@@ -150,6 +153,39 @@ export const useTransferStore = defineStore("transfers", {
         this.error = err instanceof Error ? err.message : String(err);
         return null;
       }
+    },
+    /** 用系统默认程序打开已接收文件（F23）。 */
+    async openFile(transferId: string) {
+      try {
+        await openTransferFile(transferId);
+        this.error = "";
+      } catch (err) {
+        this.error = err instanceof Error ? err.message : String(err);
+      }
+    },
+    /** 在文件管理器中定位已接收文件（F23）。 */
+    async revealFile(transferId: string) {
+      try {
+        await revealTransferFile(transferId);
+        this.error = "";
+      } catch (err) {
+        this.error = err instanceof Error ? err.message : String(err);
+      }
+    },
+    /** 另存为（F23）；返回目标路径，取消时为 null。 */
+    async saveAs(transferId: string): Promise<string | null> {
+      try {
+        const target = await saveTransferAs(transferId);
+        this.error = "";
+        return target;
+      } catch (err) {
+        this.error = err instanceof Error ? err.message : String(err);
+        return null;
+      }
+    },
+    /** 清空某对端的本地任务（配合按会话清空历史，F40）。 */
+    clearPeer(peerId: string) {
+      this.items = this.items.filter((item) => item.peerId !== peerId);
     },
     /** 载入已接收图片的预览 data URL（F23）。 */
     async loadPreview(transferId: string) {

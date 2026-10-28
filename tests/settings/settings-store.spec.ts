@@ -95,10 +95,12 @@ describe("settings store", () => {
   });
 
   it("clearAllHistory 调用清空命令并给出提示", async () => {
-    api.clearHistory.mockResolvedValue(undefined);
+    api.clearHistory.mockResolvedValue(3);
     const store = useSettingsStore();
+    store.deleteFiles = true;
     await store.clearAllHistory();
-    expect(api.clearHistory).toHaveBeenCalled();
+    expect(api.clearHistory).toHaveBeenCalledWith(undefined, true);
+    expect(store.lastRemovedFiles).toBe(3);
     expect(store.notice).toBe("historyCleared");
   });
 

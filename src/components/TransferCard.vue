@@ -60,6 +60,25 @@
       >
         {{ t("transfer.retry") }}
       </button>
+      <template v-else-if="isReceivedDone">
+        <button data-testid="transfer-open" @click="emit('open', transfer.transferId)">
+          {{ t("transfer.open") }}
+        </button>
+        <button
+          class="secondary"
+          data-testid="transfer-reveal"
+          @click="emit('reveal', transfer.transferId)"
+        >
+          {{ t("transfer.reveal") }}
+        </button>
+        <button
+          class="secondary"
+          data-testid="transfer-save-as"
+          @click="emit('saveAs', transfer.transferId)"
+        >
+          {{ t("transfer.saveAs") }}
+        </button>
+      </template>
     </div>
   </article>
 </template>
@@ -76,6 +95,9 @@ const emit = defineEmits<{
   reject: [transferId: string];
   cancel: [transferId: string];
   retry: [transferId: string];
+  open: [transferId: string];
+  reveal: [transferId: string];
+  saveAs: [transferId: string];
 }>();
 
 /** 状态 → i18n key（避免动态拼接丢失类型检查）。 */
@@ -113,6 +135,11 @@ const showProgress = computed(
 );
 const isDoneImage = computed(
   () => props.transfer.kind === "image" && props.transfer.state === "done",
+);
+
+/** 已接收完成的文件可打开/定位/另存为（F23）。 */
+const isReceivedDone = computed(
+  () => props.transfer.direction === "receive" && props.transfer.state === "done",
 );
 
 /** 失败/取消的发送任务可重试（M3-b）。 */

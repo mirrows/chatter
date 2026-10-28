@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
   onMessage: vi.fn(),
   onSessionUpdate: vi.fn(),
   isTauri: vi.fn(),
+  clearHistory: vi.fn(),
 }));
 
 vi.mock("../../src/api/tauri", () => ({
@@ -30,6 +31,10 @@ vi.mock("../../src/api/tauri", () => ({
   addDeviceByIp: vi.fn(),
   saveClipboardImage: vi.fn(),
   sendPaths: vi.fn(),
+  clearHistory: api.clearHistory,
+  openTransferFile: vi.fn(),
+  revealTransferFile: vi.fn(),
+  saveTransferAs: vi.fn(),
 }));
 
 // 必须在 mock 之后导入被测模块。
@@ -124,6 +129,19 @@ describe("Chat", () => {
     const wrapper = mount(Chat, { props });
     await wrapper.get('[data-testid="chat-back"]').trigger("click");
     expect(wrapper.emitted("back")).toHaveLength(1);
+  });
+
+  it("清空本会话记录调用后端并清空本地状态（F40）", async () => {
+    const store = useChatStore();
+    store.receive({ peerId: "peer-1", msgId: "m-1", text: "hi", ts: 1000 });
+    const wrapper = mount(Chat, { props });
+
+    await wrapper.get('[data-testid="chat-clear"]').trigger("click");
+    await flushPromises();
+
+    expect(api.clearHistory).toHaveBeenCalledWith("peer-1");
+    expect(store.messagesFor("peer-1")).toHaveLength(0);
+    expect(wrapper.find('[data-testid="chat-cleared"]').exists()).toBe(true);
   });
 
   it("store 错误以中文提示展示", () => {

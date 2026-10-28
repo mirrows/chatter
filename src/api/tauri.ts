@@ -114,9 +114,24 @@ export function getHistory(peerId?: string): Promise<History> {
   return invoke<History>("get_history", { peerId: peerId ?? null });
 }
 
-/** 清空历史（F40/F41）；`peerId` 为空时清空全部。 */
-export function clearHistory(peerId?: string): Promise<void> {
-  return invoke<void>("clear_history", { peerId: peerId ?? null });
+/** 清空历史（F40/F41）；`peerId` 为空时清空全部，`deleteFiles` 为 true 时删除下载目录内的历史文件。 */
+export function clearHistory(peerId?: string, deleteFiles = false): Promise<number> {
+  return invoke<number>("clear_history", { peerId: peerId ?? null, deleteFiles });
+}
+
+/** 用系统默认程序打开已接收文件（F23）。 */
+export function openTransferFile(transferId: string): Promise<void> {
+  return invoke<void>("open_transfer_file", { transferId });
+}
+
+/** 在文件管理器中定位已接收文件（F23）。 */
+export function revealTransferFile(transferId: string): Promise<void> {
+  return invoke<void>("reveal_transfer_file", { transferId });
+}
+
+/** 另存为（F23）；取消时返回 null。 */
+export function saveTransferAs(transferId: string): Promise<string | null> {
+  return invoke<string | null>("save_transfer_as", { transferId });
 }
 
 /** 是否开启开机自启（F50）。 */

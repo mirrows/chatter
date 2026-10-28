@@ -161,6 +161,28 @@ describe("chat store", () => {
     expect(store.error).toBe("");
   });
 
+  it("未读数累加与已读清零（F42）", () => {
+    const store = useChatStore();
+    store.receive(incoming("m-1", "a", 1000));
+    store.receive(incoming("m-2", "b", 2000));
+    expect(store.unreadFor("peer-1")).toBe(2);
+    expect(store.unreadFor("peer-2")).toBe(0);
+
+    store.markRead("peer-1");
+    expect(store.unreadFor("peer-1")).toBe(0);
+  });
+
+  it("clearPeer 只清除该对端消息与未读（F40）", () => {
+    const store = useChatStore();
+    store.receive(incoming("m-1", "a", 1000));
+    store.receive({ peerId: "peer-2", msgId: "m-2", text: "b", ts: 2000 });
+
+    store.clearPeer("peer-1");
+    expect(store.messagesFor("peer-1")).toHaveLength(0);
+    expect(store.messagesFor("peer-2")).toHaveLength(1);
+    expect(store.unreadFor("peer-1")).toBe(0);
+  });
+
   it("loadHistory 载入历史且不重复插入已知消息（F40）", async () => {
     api.isTauri.mockReturnValue(true);
     const store = useChatStore();

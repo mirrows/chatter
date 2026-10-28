@@ -45,6 +45,9 @@ const zhCN = {
   "transfer.remaining": "剩余 {time}",
   "transfer.direction.send": "发送",
   "transfer.direction.receive": "接收",
+  "transfer.open": "打开文件",
+  "transfer.reveal": "打开所在文件夹",
+  "transfer.saveAs": "另存为",
   "transfer.progress": "{percent}%",
   "transfer.previewUnavailable": "图片预览不可用",
   "nav.devices": "设备",
@@ -54,6 +57,8 @@ const zhCN = {
   "chat.pasteFailed": "粘贴图片失败：{reason}",
   "chat.folderNotSupported": "请将文件夹压缩为 zip 后发送（已忽略 {count} 个文件夹）",
   "chat.dropHint": "可直接把文件或图片拖到窗口发送",
+  "chat.clearHistory": "清空本会话记录",
+  "chat.cleared": "本会话记录已清空",
   "settings.title": "设置",
   "settings.nickname": "设备昵称",
   "settings.deviceId": "设备 ID",
@@ -70,7 +75,9 @@ const zhCN = {
   "settings.saved": "设置已保存",
   "settings.restart": "昵称或端口已修改，重启应用后生效",
   "settings.clearHistory": "清空全部历史",
+  "settings.deleteFiles": "清空历史时同时删除已接收文件",
   "settings.historyCleared": "历史已清空",
+  "settings.historyClearedWithFiles": "历史已清空，并删除 {count} 个文件",
   "settings.portsHint": "端口修改需重启应用；两端发现端口需一致",
 } as const;
 

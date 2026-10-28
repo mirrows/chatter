@@ -40,6 +40,8 @@ export const useChatStore = defineStore("chat", {
     started: false,
     /** 最近一次错误信息（空串表示无错误）。 */
     error: "",
+    /** 各对端未读消息数（F42）。 */
+    unread: {} as Record<string, number>,
   }),
   getters: {
     /** 指定对端的消息（按时间升序）。 */
@@ -47,9 +49,11 @@ export const useChatStore = defineStore("chat", {
       state.messages.filter((m) => m.peerId === peerId).sort((a, b) => a.ts - b.ts),
     /** 是否与指定对端建立了会话。 */
     isConnected: (state) => (peerId: string) => state.connected.includes(peerId),
+    /** 指定对端的未读数（F42）。 */
+    unreadFor: (state) => (peerId: string) => state.unread[peerId] ?? 0,
   },
   actions: {
-    /** 记录一条收到的消息（F10）。 */
+    /** 记录一条收到的消息（F10），并累加未读数（F42）。 */
     receive(message: IncomingMessage) {
       this.messages.push({
         id: message.msgId,
@@ -59,6 +63,16 @@ export const useChatStore = defineStore("chat", {
         ts: message.ts,
         status: "delivered",
       });
+      this.unread[message.peerId] = (this.unread[message.peerId] ?? 0) + 1;
+    },
+    /** 打开会话时清除该对端未读数（F42）。 */
+    markRead(peerId: string) {
+      this.unread[peerId] = 0;
+    },
+    /** 清空某对端的本地消息（配合按会话清空历史，F40）。 */
+    clearPeer(peerId: string) {
+      this.messages = this.messages.filter((m) => m.peerId !== peerId);
+      this.unread[peerId] = 0;
     },
     /** 应用会话连接状态事件。 */
     applySession(update: SessionUpdate) {
@@ -157,6 +171,7 @@ export const useChatStore = defineStore("chat", {
     clear() {
       this.messages = [];
       this.connected = [];
+      this.unread = {};
       this.started = false;
       this.error = "";
     },

@@ -31,6 +31,10 @@ export const useSettingsStore = defineStore("settings", {
     /** 是否已加载过。 */
     loaded: false,
     saving: false,
+    /** 清空历史时是否同时删除已接收文件（F41）。 */
+    deleteFiles: false,
+    /** 最近一次清空历史删除的文件数。 */
+    lastRemovedFiles: 0,
     /** 昵称/端口改动需重启生效。 */
     restartRequired: false,
     /** 操作成功提示（空串表示无）。 */
@@ -78,10 +82,11 @@ export const useSettingsStore = defineStore("settings", {
         this.error = err instanceof Error ? err.message : String(err);
       }
     },
-    /** 清空全部历史（F40）。 */
+    /** 清空全部历史（F40/F41），可选择同时删除已接收文件。 */
     async clearAllHistory() {
       try {
-        await clearHistory();
+        const removed = await clearHistory(undefined, this.deleteFiles);
+        this.lastRemovedFiles = removed;
         this.notice = "historyCleared";
         this.error = "";
       } catch (err) {
@@ -101,6 +106,8 @@ export const useSettingsStore = defineStore("settings", {
       this.restartRequired = false;
       this.notice = "";
       this.error = "";
+      this.deleteFiles = false;
+      this.lastRemovedFiles = 0;
     },
   },
 });
