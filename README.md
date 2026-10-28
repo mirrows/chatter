@@ -6,7 +6,7 @@
 ## 目录结构
 
 - `requirements/` — 需求与设计的唯一基准（文件名英文，正文中文）
-  - `01-project-overview.md` — 需求文档（v0.4，含 Q1–Q12 与未完成项 §3.5）
+  - `01-project-overview.md` — 需求文档（v0.5，含 Q1–Q15、未完成项 §3.5、v2 路线图 §7）
   - `02-technical-design.md` — 架构、协议、模块划分
   - `03-doc-index.md` — 文档索引与状态
   - `04-milestone-m2-report.md` — M2 里程碑报告（交付内容与测试状态）
@@ -18,6 +18,7 @@
   - `10-milestone-p0-report.md` — P0 收尾报告（手动加 IP / 粘贴 / 拖拽 / 提示 / 单实例 / 图标）
   - `11-acceptance-checklist.md` — v1.0.0-rc.1 验收清单
   - `12-milestone-p1-p2-report.md` — P1/P2 报告（文件操作、历史清理、托盘、发布工程）
+  - `13-v2-plan.md` — v2 迭代计划（多平台 / 网络与性能 / 完整块级续传）
 - `src-tauri/src/` — Rust 后端：`config` / `discovery` / `protocol` / `session` / `transfer` / `commands`
 - `src/` — Vue 3 前端：`views`（设备列表、会话）、`components`、`stores`、`api`、`i18n`
 - `tests/` — 前端统一测试目录（布局见 rules.md R2.2）
@@ -36,7 +37,7 @@
   M4 设置页（昵称/目录/端口/主题/自动接收/自启）、历史持久化与清空、复制消息、托盘与系统通知；
   P0 收尾：手动按 IP 添加设备（F3）、剪贴板粘贴图片（F21）、拖拽发送与文件夹提示（F22/F31）、上下线提示（F4）、文件通知（F51）、单实例；
   P1/P2：已接收文件打开/定位/另存为（F23）、按会话清空历史（F40）、可选删除已接收文件（F41）、关闭窗口最小化到托盘（F51）、未读徽标（F42）、20MB 预览、NSIS 防火墙钩子与验收清单
-- 下一步：实机验收（`requirements/11-acceptance-checklist.md`）、联网构建 NSIS 安装包与代码签名
+- 下一步：v1 实机验收（`requirements/11-acceptance-checklist.md`）与联网打包/签名；v2 按 `requirements/13-v2-plan.md` 启动（M6 跨平台地基 → M7∥M8 → M10 → M11 → M9）
 
 ## 数据与文件位置
 

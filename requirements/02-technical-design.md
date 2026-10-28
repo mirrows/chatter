@@ -81,7 +81,12 @@ magic = "CHTRS"（5 字节，与发现协议 magic 一致）；帧头共 10B；l
 | 0x14 | FILE_CHUNK | transfer_id(16B) + seq(4B) + data | →（≤1MB/块） |
 | 0x15 | FILE_DONE | JSON：{transfer_id, sha256} | → |
 | 0x16 | FILE_RESULT | JSON：{transfer_id, ok, path} | ←（校验结果） |
+| 0x17 | FILE_BLOCK_MAP | transfer_id(16B) + block_size(4B) + count(4B) + hashes(8B×count) | →（v2/M11，块级续传） |
+| 0x18 | FILE_HAVE | transfer_id(16B) + count(4B) + bitmap(⌈count/8⌉B) | ←（v2/M11，已收块位图） |
+| 0x19 | FILE_MISSING | transfer_id(16B) + count(4B) + indices(4B×count) | →（v2/M11，待发块，便于日志/UI） |
 | 0x1F | PING / PONG | 空 | 双向心跳（30s 间隔） |
+
+> 0x17–0x19 仅在双方 `HELLO.features` 均含 `chunkmap` 时使用（见 4.8），v1 客户端不会收到这些帧。
 
 **心跳语义（v1 明确）**：`0x1F` 为单向"我还在"通知，收到后**不回应**；双方各自每 30 秒发送一次。
 若双向互相回应会形成无限回环，故 v1 不使用"收到 ping 回 pong"的模式。
@@ -118,6 +123,41 @@ magic = "CHTRS"（5 字节，与发现协议 magic 一致）；帧头共 10B；l
 - **连接断开**：会话层 `PeerDisconnected` → 该对端所有未完成任务立即标记 `failed`（原因"连接已断开，可重试"）。
 - **重试**：`retry_transfer(transfer_id)` 以原源文件重新发起 OFFER，接收方据续传记录返回偏移。
 
+### 4.7 块级续传（v2 / M11，经 `chunkmap` 协商启用）
+
+**目标**：把 v1 的"字节偏移续传"升级为"块级校验 + 只补缺失块"，支持跨重启恢复与局部损坏重传。
+
+1. **块表**：发送端一次顺序读文件，同时计算整文件 SHA-256 与每块 SHA-256；每块取摘要前 **8 字节** 写入 `FILE_BLOCK_MAP`。
+   （2MB 块时 10GB = 5120 块 ≈ 40KB，远小于 4MB 帧上限；块哈希复用 `sha2`，无新增依赖。）
+2. **流程**：`OFFER → ACCEPT → BLOCK_MAP → HAVE → （仅缺失块）CHUNK… → DONE → RESULT`。
+3. **接收端**：`<key>.part` 用 `set_len(size)` 预分配；按 `seq × block_size` 随机写；写入前校验该块哈希，不匹配则丢弃并记为缺失。
+4. **位图**：`<下载目录>/.chatters-partial/<key>.bitmap`（位序 = 块索引，尾部附 CRC32 校验）；每 32 块或 5s 原子落盘（临时文件 + 改名）。
+5. **完成判定**：位图全满 **且** 整文件 SHA-256 匹配 → 改名为正式文件；否则回 `FILE_RESULT ok=false`，
+   错误分类：`missing_blocks` / `block_hash_mismatch` / `file_hash_mismatch`。
+6. **恢复**：重启加载位图（CRC 校验）；位图缺失/损坏 → 读 `.part` 逐块比对 BLOCK_MAP 重建；块大小不一致 → 丢弃旧块状态。
+7. **降级**：对端未声明 `chunkmap` → 使用 v1 字节偏移续传（`FILE_ACCEPT.resume_offset`），其余流程不变。
+8. **清理**：成功删位图并改名；取消/拒绝/校验失败删 `.part` + `.bitmap`；超时/断线保留两者。
+
+### 4.8 版本与能力协商（v2 / M10）
+
+- `HELLO` 的 JSON 增加可选字段 **`features: string[]`**；旧端无该字段时按空数组处理（serde 默认），因此**协议 `ver` 保持 1**。
+- 已定义能力：
+
+| 能力 | 作用 | 缺失时行为 |
+|---|---|---|
+| `chunk2m` | 使用 2MB 数据块 | 回落 1MB 块（v1 行为） |
+| `chunkmap` | 启用块级续传（0x17–0x19） | 回落字节偏移续传 |
+
+- 协商原则：**双方都声明才启用**；未知能力忽略并记录日志（便于后续扩展）；
+- 兼容矩阵（必须回归）：
+
+| 发送端 | 接收端 | 行为 |
+|---|---|---|
+| v2 | v2（均含两能力） | 2MB 块 + 块级续传 |
+| v2 | v2（仅 `chunk2m`） | 2MB 块 + 偏移续传 |
+| v2 | v1 | 1MB 块 + 偏移续传 |
+| v1 | v2 | 1MB 块 + 偏移续传 |
+
 ## 5. Rust 端模块划分
 
 ```
@@ -148,6 +188,7 @@ src-tauri/src/
 | 历史 | **JSON 文件 `history.json`**（M4；原计划 SQLite） | 消息数组（msgId/peerId/direction/text/ts/status）+ 传输数组（transferId/peerId/direction/kind/filename/size/transferred/state/path/ts）；写入采用 `临时文件 + 改名` 原子落盘，保留最近 2000 条消息 / 500 条传输 |
 | 接收文件 | 下载目录（默认 `下载/Chatters`） | 传输中写 `.chatters-partial/<key>.part`，校验通过后改名 |
 | 续传元数据 | 下载目录 `.chatters-partial/<key>.json` | `{ filename, size, sha256 }`，用于简版续传匹配 |
+| 块续传位图（v2/M11） | 下载目录 `.chatters-partial/<key>.bitmap` | 块完成位图 + CRC32；每 32 块或 5s 原子落盘，重启后恢复 |
 
 **偏差说明（R6.2）**：设计原定 SQLite（`rusqlite`/`sqlx`），但当前构建环境离线、无法引入新依赖；
 v1 采用 JSON 文件实现同等语义（可读、按对端筛选、清空、重启后可见）。后续联网后可平滑替换为 SQLite。
@@ -233,3 +274,52 @@ src/
 6. **M5**：Windows 安装包（NSIS）、防火墙引导、使用说明；此后进入 macOS/Linux/Android 移植评估。**状态：已完成免安装版交付**（NSIS 安装包需联网构建，见 `08-milestone-m5-report.md`）。
 
 M2 交付与测试状态见 `requirements/04-milestone-m2-report.md`。
+
+### v2 里程碑（计划，详见 `13-v2-plan.md`）
+
+| 里程碑 | 内容 | 人日 |
+|---|---|---|
+| M6 | 跨平台地基：平台能力层、文件名/路径规则、构建目标、CI matrix | 5 |
+| M7 | macOS 客户端：dmg/app、托盘、通知、LaunchAgent、签名（可延后） | 4 |
+| M8 | Linux 客户端：deb/AppImage、.desktop、AppIndicator 降级 | 4 |
+| M10 | 自动重连、设备指纹、性能优化（`chunk2m` 2MB 块 + 缓冲写） | 6–9 |
+| M11 | 完整块级续传（§4.7，0x17–0x19 + 位图恢复 + v1 降级） | 8–12 |
+| M9 | Android：MulticastLock 广播、SAF 保存、前台服务、移动 UI | 18–25 |
+
+顺序：**M6 → M7 ∥ M8 → M10 → M11 → M9**（M9 的 3 天 spike 第 1 周并行）。
+版本：`v2.0.0-rc.1` = M6+M7+M8+M10+M11；`v2.1.0` = M9；GA 需安装包 + 签名（阶段性可未签名，见 `01` Q13）。
+
+## 11. 跨平台适配（v2 / M6–M9）
+
+### 11.1 平台能力层
+
+```
+platform/
+├── mod.rs        // 统一导出：download_dir / cache_dir / config_dir / open_file / reveal_file
+├── windows.rs    // %USERPROFILE%\Downloads\Chatters；cmd start / explorer /select
+├── macos.rs      // ~/Downloads/Chatters；open / open -R
+├── linux.rs      // XDG 下载目录回退 ~/Downloads/Chatters；xdg-open
+└── android.rs    // 私有目录 + SAF 导出（M9）
+```
+
+- `safe_file_name`：**按平台判定非法字符**（Windows 禁 `: < > " | ? *` 与控制字符；Unix 仅禁 `/` 与 NUL）；
+- 托盘/通知：提供 `tray_supported()` / `notification_supported()`，失败时静默降级并记录日志；
+- 单实例：macOS/Linux 行为需实测（Linux 依赖 DBus/XDG）。
+
+### 11.2 各平台差异清单
+
+| 项 | Windows | macOS | Linux | Android |
+|---|---|---|---|---|
+| 打包 | NSIS | dmg + app | deb + AppImage | APK/AAB |
+| 图标 | png + ico(256) | icns | png 多尺寸 | 自适应图标 |
+| 托盘 | 原生 | 原生菜单 | AppIndicator（GNOME 需扩展） | 无（改通知） |
+| 通知 | 系统 toast | 需授权 | libnotify/DBus | 13+ 需授权 |
+| 自启 | 注册表 | LaunchAgent | ~/.config/autostart | 不适用 |
+| 文件打开/定位 | cmd start / explorer | open / open -R | xdg-open | Intent + SAF |
+| 防火墙 | netsh（安装钩子） | 系统弹窗授权 | ufw/firewalld（文档） | 不适用 |
+| 接收落盘 | 下载目录直写 | 下载目录直写 | 下载目录直写 | 私有目录 → SAF 导出 |
+
+### 11.3 签名与交付口径（Q13）
+
+- 阶段性允许**未签名** EXE / dmg / APK；发布说明必须标注 SmartScreen、Gatekeeper、Android 未知来源提示；
+- 证书到位后补签：Windows（Authenticode）、macOS（Developer ID + notarytool）、Android（keystore）。
