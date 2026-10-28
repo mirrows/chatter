@@ -6,8 +6,9 @@
 ## 目录结构
 
 - `requirements/` — 需求与设计的唯一基准（文件名英文，正文中文）
-  - `01-project-overview.md` — 需求文档（v0.3）
+  - `01-project-overview.md` — 需求文档（v0.4，含 Q1–Q12 与未完成项 §3.5）
   - `02-technical-design.md` — 架构、协议、模块划分
+  - `03-doc-index.md` — 文档索引与状态
   - `04-milestone-m2-report.md` — M2 里程碑报告（交付内容与测试状态）
   - `05-milestone-m3a-report.md` — M3-a 里程碑报告（图片/文件传输）
   - `06-milestone-m3b-report.md` — M3-b 里程碑报告（续传/超时/重试）
