@@ -1,7 +1,7 @@
 # Chatters — 局域网点对点传输工具（文字 / 图片 / 文件）
 
 > 无需服务器、免登录的局域网点对点传输工具，支持文字、图片与文件传输。
-> 技术栈：Tauri 2.x + Vue 3 + Rust 后端。当前版本：**1.0.0-rc.1**（M2–M4 + P0 收尾完成，Windows 免安装版可交付）。
+> 技术栈：Tauri 2.x + Vue 3 + Rust 后端。当前版本：**1.0.0-rc.1**（M2–M4 + P0/P1/P2 收尾完成，Windows 免安装版可交付）。
 
 ## 目录结构
 
@@ -15,6 +15,8 @@
   - `08-milestone-m5-report.md` — M5 里程碑报告（打包与交付）
   - `09-user-guide.md` — 使用说明（安装、防火墙、收发、FAQ）
   - `10-milestone-p0-report.md` — P0 收尾报告（手动加 IP / 粘贴 / 拖拽 / 提示 / 单实例 / 图标）
+  - `11-acceptance-checklist.md` — v1.0.0-rc.1 验收清单
+  - `12-milestone-p1-p2-report.md` — P1/P2 报告（文件操作、历史清理、托盘、发布工程）
 - `src-tauri/src/` — Rust 后端：`config` / `discovery` / `protocol` / `session` / `transfer` / `commands`
 - `src/` — Vue 3 前端：`views`（设备列表、会话）、`components`、`stores`、`api`、`i18n`
 - `tests/` — 前端统一测试目录（布局见 rules.md R2.2）
@@ -31,8 +33,9 @@
   M3-a 图片/文件传输主流程（`send_file` / `accept_file` / `cancel_transfer` / `transfer://update`，图片自动接收与预览、sha256 校验）；
   M3-b 简版续传、空闲超时与断线重试（`retry_transfer`）、速度与剩余时间；
   M4 设置页（昵称/目录/端口/主题/自动接收/自启）、历史持久化与清空、复制消息、托盘与系统通知；
-  P0 收尾：手动按 IP 添加设备（F3）、剪贴板粘贴图片（F21）、拖拽发送与文件夹提示（F22/F31）、上下线提示（F4）、文件通知（F51）、单实例
-- 下一步：P1（打开/另存为、按会话清空历史、最小化到托盘、大文件实测）与 P2（NSIS 安装包、签名）
+  P0 收尾：手动按 IP 添加设备（F3）、剪贴板粘贴图片（F21）、拖拽发送与文件夹提示（F22/F31）、上下线提示（F4）、文件通知（F51）、单实例；
+  P1/P2：已接收文件打开/定位/另存为（F23）、按会话清空历史（F40）、可选删除已接收文件（F41）、关闭窗口最小化到托盘（F51）、未读徽标（F42）、20MB 预览、NSIS 防火墙钩子与验收清单
+- 下一步：实机验收（`requirements/11-acceptance-checklist.md`）、联网构建 NSIS 安装包与代码签名
 
 ## 数据与文件位置
 

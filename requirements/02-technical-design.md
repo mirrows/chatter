@@ -183,13 +183,14 @@ src/
 | `send_file(peer_id, path)` | 图片或文件（后端按扩展名区分类型，返回任务快照） |
 | `accept_file(transfer_id)` / `reject_file(transfer_id)` | 接收确认（F34） |
 | `cancel_transfer(transfer_id)` / `retry_transfer(transfer_id)` | 终止 / 重试（重试为 M3-b 实现，按续传偏移继续） |
+| `open_transfer_file(transfer_id)` / `reveal_transfer_file(transfer_id)` / `save_transfer_as(transfer_id)` | 打开已接收文件 / 在资源管理器定位 / 另存为（P1，F23） |
 | `list_transfers()` | 传输任务列表（界面重建时使用） |
 | `get_image_preview(transfer_id)` | 已接收图片的 data URL（F23 预览） |
 | `pick_file(images_only)` | 打开系统文件选择框，返回绝对路径（F20/F30） |
 | `send_paths(peer_id, paths)` | 批量发送拖拽路径（F22）；目录返回 `is_dir` 供前端提示压缩为 zip（F31） |
 | `save_clipboard_image(data_base64, extension)` | 剪贴板图片落盘到缓存目录，返回路径（F21） |
 | `get_settings` / `save_settings` | 设置读取/保存（M4；昵称/端口改动需重启生效） |
-| `get_history(peer_id?)` / `clear_history(peer_id?)` | 历史读取/清空（M4，JSON 存储） |
+| `get_history(peer_id?)` / `clear_history(peer_id?, delete_files?)` | 历史读取/清空（M4，JSON 存储；`delete_files` 仅删下载目录内记录文件，P1/F41） |
 | `get_autostart` / `set_autostart(enabled)` | 开机自启查询/设置（M4，F50） |
 
 事件：`device://update`、`message://new`、`transfer://update`、`session://update`（会话连接状态）。
