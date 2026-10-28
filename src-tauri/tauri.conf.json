@@ -32,6 +32,11 @@
       "icons/chatters-128.png",
       "icons/chatters-512.png",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/installer-hooks.nsh"
+      }
+    }
   }
 }
