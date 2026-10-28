@@ -26,6 +26,8 @@ export const useDeviceStore = defineStore("devices", {
     count: (state) => state.devices.length,
     /** 本机昵称；未取到后端信息时为空串。 */
     localName: (state) => state.local?.name ?? "",
+    /** 本机指纹（v2/M10）；未取到后端信息时为空串。 */
+    localFingerprint: (state) => state.local?.fingerprint ?? "",
   },
   actions: {
     /** 上线/刷新一台设备。 */

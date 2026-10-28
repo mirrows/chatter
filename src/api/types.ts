@@ -11,6 +11,8 @@ export interface DeviceEntry {
   addr: string;
   /** 对端 TCP 端口。 */
   tcpPort: number;
+  /** 设备指纹（v2/M10）：SHA-256 前 8 字节，供人工核对。 */
+  fingerprint: string;
 }
 
 /** 本机信息（与 Rust LocalDeviceDto 对应）。 */
@@ -23,6 +25,8 @@ export interface LocalDevice {
   discoveryPort: number;
   /** TCP 通信端口。 */
   tcpPort: number;
+  /** 本机指纹（v2/M10）。 */
+  fingerprint: string;
 }
 
 /** 设备表变更事件（与 Rust DeviceUpdate 对应，`device://update` 事件载荷）。 */
@@ -59,7 +63,10 @@ export interface IncomingMessage {
 
 /** 会话连接状态事件（与 Rust SessionUpdate 对应，`session://update` 载荷）。 */
 export type SessionUpdate =
-  { kind: "connected"; peerId: string; name: string } | { kind: "disconnected"; peerId: string };
+  | { kind: "connected"; peerId: string; name: string }
+  | { kind: "disconnected"; peerId: string }
+  | { kind: "reconnecting"; peerId: string; attempt: number }
+  | { kind: "reconnectFailed"; peerId: string };
 
 /** 传输方向。 */
 export type TransferDirection = "send" | "receive";

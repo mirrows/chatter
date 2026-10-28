@@ -9,6 +9,7 @@ const entry = (id: string, name: string): DeviceEntry => ({
   name,
   addr: "192.168.1.10:28101",
   tcpPort: 28101,
+  fingerprint: "AAAA-BBBB-CCCC-DDDD",
 });
 
 describe("device store", () => {
@@ -56,6 +57,7 @@ describe("device store", () => {
       name: "PC-self",
       discoveryPort: 28100,
       tcpPort: 28101,
+      fingerprint: "1111-2222-3333-4444",
     };
     store.started = true;
     store.error = "x";

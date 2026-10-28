@@ -22,6 +22,7 @@ describe("DeviceList", () => {
       name: "PC-8f3a",
       addr: "192.168.1.10:51000",
       tcpPort: 51000,
+      fingerprint: "AAAA-BBBB-CCCC-DDDD",
     });
     const wrapper = mount(DeviceList);
     expect(wrapper.text()).toContain("PC-8f3a");
@@ -29,9 +30,30 @@ describe("DeviceList", () => {
     expect(wrapper.text()).toContain("在线 1 台");
   });
 
+  it("显示设备指纹便于人工核对（v2/M10）", () => {
+    const store = useDeviceStore();
+    store.upsert({
+      deviceId: "id-1",
+      name: "PC-8f3a",
+      addr: "192.168.1.10:51000",
+      tcpPort: 51000,
+      fingerprint: "AAAA-BBBB-CCCC-DDDD",
+    });
+    const wrapper = mount(DeviceList);
+    expect(wrapper.get('[data-testid="device-fingerprint"]').text()).toBe(
+      "指纹 AAAA-BBBB-CCCC-DDDD",
+    );
+  });
+
   it("设备下线后从列表移除", () => {
     const store = useDeviceStore();
-    store.upsert({ deviceId: "id-1", name: "A", addr: "1.1.1.1:1", tcpPort: 1 });
+    store.upsert({
+      deviceId: "id-1",
+      name: "A",
+      addr: "1.1.1.1:1",
+      tcpPort: 1,
+      fingerprint: "AAAA-BBBB-CCCC-DDDD",
+    });
     store.remove("id-1");
     const wrapper = mount(DeviceList);
     expect(wrapper.text()).not.toContain("A");
@@ -44,9 +66,13 @@ describe("DeviceList", () => {
       name: "PC-self",
       discoveryPort: 28100,
       tcpPort: 28101,
+      fingerprint: "1111-2222-3333-4444",
     };
     const wrapper = mount(DeviceList);
     expect(wrapper.get('[data-testid="local-device"]').text()).toBe("本机：PC-self");
+    expect(wrapper.get('[data-testid="local-fingerprint"]').text()).toBe(
+      "指纹 1111-2222-3333-4444",
+    );
   });
 
   it("初始化失败时展示错误信息", () => {
@@ -63,6 +89,7 @@ describe("DeviceList", () => {
       name: "PC-8f3a",
       addr: "192.168.1.10:51000",
       tcpPort: 51000,
+      fingerprint: "AAAA-BBBB-CCCC-DDDD",
     };
     store.upsert(device);
 

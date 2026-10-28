@@ -1,7 +1,8 @@
 //! 发送端（M3-a）：等待 ACCEPT、流式读取文件、分块发送、等待 FILE_RESULT。
 
 use super::{
-    chunk_seq, Inner, TransferError, TransferState, CHUNK_SIZE, OFFER_TIMEOUT, RESULT_TIMEOUT,
+    chunk_seq_with, Inner, TransferError, TransferState, CHUNK_SIZE, CHUNK_SIZE_2M, OFFER_TIMEOUT,
+    RESULT_TIMEOUT,
 };
 use crate::protocol::{encode_chunk, FileDone, FileResult, Frame, FrameType};
 use std::sync::atomic::Ordering;
@@ -62,24 +63,36 @@ pub(crate) async fn run(
 
     let uuid = uuid::Uuid::parse_str(&transfer_id)
         .map_err(|e| TransferError::InvalidState(format!("bad transfer id: {e}")))?;
+    // v2 能力协商：双方都声明 `chunk2m` 时使用 2MB 块，否则退回 1MB（v1 兼容）。
+    let chunk_size = if inner
+        .session
+        .peer_features(&peer_id)
+        .await
+        .iter()
+        .any(|feature| feature == "chunk2m")
+    {
+        CHUNK_SIZE_2M
+    } else {
+        CHUNK_SIZE
+    };
     let mut file = tokio::fs::File::open(&source).await?;
     if offset > 0 {
         file.seek(std::io::SeekFrom::Start(offset)).await?;
     }
 
-    let mut buf = vec![0u8; CHUNK_SIZE];
+    let mut buf = vec![0u8; chunk_size];
     let mut sent = offset;
     while sent < size {
         if cancel.load(Ordering::Relaxed) {
             return cancelled(inner, &transfer_id).await;
         }
         let remaining = (size - sent) as usize;
-        let want = remaining.min(CHUNK_SIZE);
+        let want = remaining.min(chunk_size);
         let read = file.read(&mut buf[..want]).await?;
         if read == 0 {
             break;
         }
-        let payload = encode_chunk(&uuid, chunk_seq(sent), &buf[..read])?;
+        let payload = encode_chunk(&uuid, chunk_seq_with(sent, chunk_size), &buf[..read])?;
         if let Err(e) = inner
             .send(&peer_id, Frame::new(FrameType::FileChunk, payload))
             .await

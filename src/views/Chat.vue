@@ -6,7 +6,7 @@
       </button>
       <h2 data-testid="chat-title">{{ t("chat.title", { name: peerName }) }}</h2>
       <p class="muted" data-testid="chat-connection">
-        {{ connected ? t("chat.connected") : t("chat.disconnected") }}
+        {{ connectionText }}
       </p>
       <div class="attach">
         <button
@@ -140,6 +140,12 @@ const messages = computed(() => store.messagesFor(props.peerId));
 const connected = computed(() => store.isConnected(props.peerId));
 const error = computed(() => store.error);
 const peerTransfers = computed(() => transfers.forPeer(props.peerId));
+// 连接状态文案（v2/M10）：已连接 / 正在第 n 次重连 / 未连接。
+const connectionText = computed(() => {
+  if (connected.value) return t("chat.connected");
+  const attempt = store.reconnectAttempt(props.peerId);
+  return attempt > 0 ? t("chat.reconnecting", { attempt }) : t("chat.disconnected");
+});
 
 // 已完成的图片自动取回预览数据；失败时由 TransferCard 提示（F23）。
 watch(

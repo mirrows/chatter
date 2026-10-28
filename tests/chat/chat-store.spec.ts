@@ -109,6 +109,28 @@ describe("chat store", () => {
     expect(store.isConnected("peer-1")).toBe(false);
   });
 
+  it("applySession 重连中记录尝试次数，连接成功后清除（v2/M10）", () => {
+    const store = useChatStore();
+    store.applySession({ kind: "connected", peerId: "peer-1", name: "PC-peer" });
+    expect(store.isConnected("peer-1")).toBe(true);
+
+    store.applySession({ kind: "reconnecting", peerId: "peer-1", attempt: 2 });
+    expect(store.isConnected("peer-1")).toBe(false);
+    expect(store.reconnectAttempt("peer-1")).toBe(2);
+
+    store.applySession({ kind: "connected", peerId: "peer-1", name: "PC-peer" });
+    expect(store.reconnectAttempt("peer-1")).toBe(0);
+  });
+
+  it("applySession 重连失败后清空重连状态（v2/M10）", () => {
+    const store = useChatStore();
+    store.applySession({ kind: "reconnecting", peerId: "peer-1", attempt: 1 });
+    expect(store.reconnectAttempt("peer-1")).toBe(1);
+
+    store.applySession({ kind: "reconnectFailed", peerId: "peer-1" });
+    expect(store.reconnectAttempt("peer-1")).toBe(0);
+  });
+
   it("retry 重发失败消息并更新状态与时间", async () => {
     api.sendText.mockResolvedValueOnce({ msgId: "m-1", status: "failed" });
     const store = useChatStore();

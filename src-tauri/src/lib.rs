@@ -10,6 +10,7 @@
 pub mod commands;
 pub mod config;
 pub mod discovery;
+pub mod platform;
 pub mod protocol;
 pub mod session;
 pub mod storage;
@@ -122,12 +123,12 @@ pub fn run() -> Result<(), tauri::Error> {
 
             // TCP 监听需要在 manage 之前就绪，否则首条 send_text 可能找不到会话中心。
             let (hub, mut session_events, _session_task) =
-                tauri::async_runtime::block_on(start_session(SessionConfig {
-                    device_id: cfg.device_id.clone(),
-                    name: cfg.nickname.clone(),
-                    tcp_port: cfg.tcp_port,
-                    ack_timeout: DEFAULT_ACK_TIMEOUT,
-                }))?;
+                tauri::async_runtime::block_on(start_session(SessionConfig::new(
+                    &cfg.device_id,
+                    &cfg.nickname,
+                    cfg.tcp_port,
+                    DEFAULT_ACK_TIMEOUT,
+                )))?;
 
             // 传输中心：接收目录取配置里的下载目录，图片自动接收（F34）。
             let (transfer_tx, mut transfer_rx) = tokio::sync::mpsc::channel::<TransferEvent>(64);
@@ -154,28 +155,30 @@ pub fn run() -> Result<(), tauri::Error> {
             app.manage(state);
 
             // 托盘（F51）：显示主窗口 / 退出；双击图标亦显示窗口。
+            // Android 无托盘（M9 改为纯通知），其它平台若缺少图标则跳过。
             let show_item = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
-            if let Some(icon) = app.default_window_icon().cloned() {
-                TrayIconBuilder::with_id("main-tray")
-                    .icon(icon)
-                    .tooltip("Chatters")
-                    .menu(&tray_menu)
-                    .show_menu_on_left_click(true)
-                    .on_menu_event(|app, event| match event.id.as_ref() {
-                        "show" => {
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
+            match app.default_window_icon().cloned() {
+                Some(icon) if platform::tray_supported() => {
+                    TrayIconBuilder::with_id("main-tray")
+                        .icon(icon)
+                        .tooltip("Chatters")
+                        .menu(&tray_menu)
+                        .show_menu_on_left_click(true)
+                        .on_menu_event(|app, event| match event.id.as_ref() {
+                            "show" => {
+                                if let Some(window) = app.get_webview_window("main") {
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                }
                             }
-                        }
-                        "quit" => app.exit(0),
-                        _ => {}
-                    })
-                    .build(app)?;
-            } else {
-                log::warn!("application icon missing, tray disabled");
+                            "quit" => app.exit(0),
+                            _ => {}
+                        })
+                        .build(app)?;
+                }
+                _ => log::warn!("tray unavailable on this platform or icon missing, tray disabled"),
             }
 
             // 传输事件 → 前端 transfer://update（含待确认文件）+ 历史落库。
@@ -267,6 +270,21 @@ pub fn run() -> Result<(), tauri::Error> {
                             // 连接断开时把该对端未完成任务标记为可重试（M3-b）。
                             transfer_router.handle_peer_disconnected(&device_id).await;
                             let update = SessionUpdate::Disconnected { peer_id: device_id };
+                            if let Err(e) = session_handle.emit(SESSION_UPDATE_EVENT, update) {
+                                log::warn!("failed to emit session update: {e}");
+                            }
+                        }
+                        SessionEvent::PeerReconnecting { device_id, attempt } => {
+                            let update = SessionUpdate::Reconnecting {
+                                peer_id: device_id,
+                                attempt,
+                            };
+                            if let Err(e) = session_handle.emit(SESSION_UPDATE_EVENT, update) {
+                                log::warn!("failed to emit session update: {e}");
+                            }
+                        }
+                        SessionEvent::PeerReconnectFailed { device_id } => {
+                            let update = SessionUpdate::ReconnectFailed { peer_id: device_id };
                             if let Err(e) = session_handle.emit(SESSION_UPDATE_EVENT, update) {
                                 log::warn!("failed to emit session update: {e}");
                             }

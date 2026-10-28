@@ -42,6 +42,8 @@ export const useChatStore = defineStore("chat", {
     error: "",
     /** 各对端未读消息数（F42）。 */
     unread: {} as Record<string, number>,
+    /** 各对端当前自动重连尝试次数（v2/M10；0 表示未在重连）。 */
+    reconnecting: {} as Record<string, number>,
   }),
   getters: {
     /** 指定对端的消息（按时间升序）。 */
@@ -51,6 +53,8 @@ export const useChatStore = defineStore("chat", {
     isConnected: (state) => (peerId: string) => state.connected.includes(peerId),
     /** 指定对端的未读数（F42）。 */
     unreadFor: (state) => (peerId: string) => state.unread[peerId] ?? 0,
+    /** 指定对端的自动重连尝试次数（v2/M10，0 表示未在重连）。 */
+    reconnectAttempt: (state) => (peerId: string) => state.reconnecting[peerId] ?? 0,
   },
   actions: {
     /** 记录一条收到的消息（F10），并累加未读数（F42）。 */
@@ -74,12 +78,18 @@ export const useChatStore = defineStore("chat", {
       this.messages = this.messages.filter((m) => m.peerId !== peerId);
       this.unread[peerId] = 0;
     },
-    /** 应用会话连接状态事件。 */
+    /** 应用会话连接状态事件（v2/M10 增加重连中/重连失败）。 */
     applySession(update: SessionUpdate) {
       if (update.kind === "connected") {
         if (!this.connected.includes(update.peerId)) this.connected.push(update.peerId);
+        delete this.reconnecting[update.peerId];
+        return;
+      }
+      this.connected = this.connected.filter((id) => id !== update.peerId);
+      if (update.kind === "reconnecting") {
+        this.reconnecting[update.peerId] = update.attempt;
       } else {
-        this.connected = this.connected.filter((id) => id !== update.peerId);
+        delete this.reconnecting[update.peerId];
       }
     },
     /**
@@ -172,6 +182,7 @@ export const useChatStore = defineStore("chat", {
       this.messages = [];
       this.connected = [];
       this.unread = {};
+      this.reconnecting = {};
       this.started = false;
       this.error = "";
     },

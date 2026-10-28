@@ -216,6 +216,8 @@ pub async fn write_frame<W: AsyncWrite + Unpin>(
 }
 
 /// 握手帧 JSON（HELLO）。
+///
+/// `features` 为 v2 引入的可选能力协商字段（v1 端无此字段，按空数组处理）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hello {
     /// 发送方唯一 ID。
@@ -224,16 +226,45 @@ pub struct Hello {
     pub name: String,
     /// 协议版本。
     pub ver: u8,
+    /// 能力声明（v2，缺省为空，保证 v1 兼容）。
+    #[serde(default)]
+    pub features: Vec<String>,
+    /// 发送方 TCP 监听端口（v2，用于断线自动重连；v1 端为空）。
+    #[serde(default)]
+    pub tcp_port: Option<u16>,
 }
 
 impl Hello {
-    /// 以本机身份构造 HELLO。
+    /// 以本机身份构造 HELLO（无能力声明，v1 兼容格式）。
     pub fn new(device_id: &str, name: &str) -> Self {
         Self {
             device_id: device_id.to_string(),
             name: name.to_string(),
             ver: 1,
+            features: Vec::new(),
+            tcp_port: None,
         }
+    }
+
+    /// 以本机身份 + 能力声明 + TCP 端口构造 HELLO（v2）。
+    pub fn with_features(
+        device_id: &str,
+        name: &str,
+        features: Vec<String>,
+        tcp_port: u16,
+    ) -> Self {
+        Self {
+            device_id: device_id.to_string(),
+            name: name.to_string(),
+            ver: 1,
+            features,
+            tcp_port: Some(tcp_port),
+        }
+    }
+
+    /// 是否声明了某项能力。
+    pub fn supports(&self, feature: &str) -> bool {
+        self.features.iter().any(|item| item == feature)
     }
 }
 
@@ -325,8 +356,10 @@ pub struct FileResult {
 
 /// FILE_CHUNK 头部长度：transfer_id(16B) + seq(4B)。
 pub const CHUNK_HEADER_LEN: usize = 20;
-/// 单块最大数据长度（1MB，见设计文档 4.1）。
-pub const MAX_CHUNK_DATA: usize = 1024 * 1024;
+/// 单块最大数据长度（2MB；帧上限 4MB，含 20B 块头仍安全）。
+///
+/// v1 客户端使用 1MB；v2 经 `HELLO.features` 的 `chunk2m` 协商后使用 2MB。
+pub const MAX_CHUNK_DATA: usize = 2 * 1024 * 1024;
 
 /// 编码 FILE_CHUNK payload：transfer_id(16B) + seq(4B, 大端) + data。
 pub fn encode_chunk(transfer_id: &Uuid, seq: u32, data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
@@ -355,6 +388,28 @@ pub fn decode_chunk(payload: &[u8]) -> Result<(Uuid, u32, &[u8]), ProtocolError>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 正常路径：v2 HELLO 携带能力声明与监听端口，可原样往返。
+    #[test]
+    fn hello_with_features_roundtrip() {
+        let hello = Hello::with_features("id-1", "PC-a", vec!["chunk2m".to_string()], 28101);
+        let bytes = serde_json::to_vec(&hello).expect("serialize");
+        let back: Hello = serde_json::from_slice(&bytes).expect("deserialize");
+        assert_eq!(back, hello);
+        assert!(back.supports("chunk2m"));
+        assert!(!back.supports("chunkmap"));
+        assert_eq!(back.tcp_port, Some(28101));
+    }
+
+    /// 边界：v1 HELLO 缺 features/tcp_port 时按默认值解析（向后兼容）。
+    #[test]
+    fn hello_without_v2_fields_parses() {
+        let hello: Hello =
+            serde_json::from_str(r#"{"device_id":"id-1","name":"PC-a","ver":1}"#).expect("parse");
+        assert!(hello.features.is_empty());
+        assert_eq!(hello.tcp_port, None);
+        assert!(!hello.supports("chunk2m"));
+    }
 
     fn text_frame() -> Frame {
         Frame::json(

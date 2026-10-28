@@ -56,6 +56,21 @@ describe("Chat", () => {
     expect(wrapper.get('[data-testid="chat-connection"]').text()).toBe("未连接（发送时自动连接）");
   });
 
+  it("重连中显示尝试次数（v2/M10）", () => {
+    const store = useChatStore();
+    store.applySession({ kind: "reconnecting", peerId: "peer-1", attempt: 2 });
+    const wrapper = mount(Chat, { props });
+    expect(wrapper.get('[data-testid="chat-connection"]').text()).toBe("正在重连…（第 2 次）");
+  });
+
+  it("重连失败后回到未连接状态（v2/M10）", () => {
+    const store = useChatStore();
+    store.applySession({ kind: "reconnecting", peerId: "peer-1", attempt: 3 });
+    store.applySession({ kind: "reconnectFailed", peerId: "peer-1" });
+    const wrapper = mount(Chat, { props });
+    expect(wrapper.get('[data-testid="chat-connection"]').text()).toBe("未连接（发送时自动连接）");
+  });
+
   it("只渲染当前对端的消息，并显示发送状态", () => {
     const store = useChatStore();
     store.receive({ peerId: "peer-1", msgId: "m-1", text: "来自对端", ts: 1000 });

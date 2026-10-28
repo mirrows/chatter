@@ -22,8 +22,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot, Mutex};
 
-/// 单块数据大小（1MB，与协议上限一致）。
-pub const CHUNK_SIZE: usize = crate::protocol::MAX_CHUNK_DATA;
+/// 单块数据大小（v1 默认 1MB）。
+pub const CHUNK_SIZE: usize = 1024 * 1024;
+/// 协商后的单块大小（v2 `chunk2m`：2MB，与协议上限一致）。
+pub const CHUNK_SIZE_2M: usize = crate::protocol::MAX_CHUNK_DATA;
 /// 等待接收方 ACCEPT/REJECT 的超时。
 pub const OFFER_TIMEOUT: Duration = Duration::from_secs(30);
 /// 等待接收方 FILE_RESULT 的超时。
@@ -405,19 +407,13 @@ pub(crate) async fn hash_file(path: &Path) -> Result<String, TransferError> {
 }
 
 /// 校验并提取安全的落盘文件名，拒绝路径穿越（rules.md R5.2）。
+///
+/// 平台差异（Windows 额外禁止 `: < > " | ? *`）由 `platform::file_name_allowed` 判定。
 pub fn safe_file_name(raw: &str) -> Result<String, TransferError> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty()
-        || trimmed == "."
-        || trimmed == ".."
-        || trimmed.contains('/')
-        || trimmed.contains('\\')
-        || trimmed.contains("..")
-        || trimmed.contains(':')
-    {
+    if !crate::platform::file_name_allowed(raw) {
         return Err(TransferError::UnsafeFileName(raw.to_string()));
     }
-    Ok(trimmed.to_string())
+    Ok(raw.trim().to_string())
 }
 
 /// 目标文件已存在时生成带序号的新文件名，避免覆盖用户已有文件。
@@ -452,9 +448,9 @@ pub(crate) fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
-/// 按偏移计算块序号。
-pub(crate) fn chunk_seq(offset: u64) -> u32 {
-    (offset / CHUNK_SIZE as u64) as u32
+/// 按偏移与块大小计算块序号。
+pub(crate) fn chunk_seq_with(offset: u64, chunk_size: usize) -> u32 {
+    (offset / chunk_size as u64) as u32
 }
 
 /// 解析 FILE_CHUNK 帧，返回 (transfer_id, seq, 数据)。
@@ -890,13 +886,18 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// 边界：块序号按 1MB 计算。
+    /// 边界：块序号按 1MB / 2MB 两种块大小计算。
     #[test]
     fn chunk_seq_uses_chunk_size() {
-        assert_eq!(chunk_seq(0), 0);
-        assert_eq!(chunk_seq(CHUNK_SIZE as u64 - 1), 0);
-        assert_eq!(chunk_seq(CHUNK_SIZE as u64), 1);
-        assert_eq!(chunk_seq((CHUNK_SIZE as u64) * 3 + 5), 3);
+        assert_eq!(chunk_seq_with(0, CHUNK_SIZE), 0);
+        assert_eq!(chunk_seq_with(CHUNK_SIZE as u64 - 1, CHUNK_SIZE), 0);
+        assert_eq!(chunk_seq_with(CHUNK_SIZE as u64, CHUNK_SIZE), 1);
+        assert_eq!(chunk_seq_with((CHUNK_SIZE as u64) * 3 + 5, CHUNK_SIZE), 3);
+        assert_eq!(chunk_seq_with(CHUNK_SIZE_2M as u64, CHUNK_SIZE_2M), 1);
+        assert_eq!(
+            chunk_seq_with((CHUNK_SIZE_2M as u64) * 2 + 7, CHUNK_SIZE_2M),
+            2
+        );
     }
 
     /// 正常路径：图片/文件与状态枚举的字符串标识稳定（前端依赖）。

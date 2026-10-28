@@ -7,6 +7,9 @@
     <p v-if="store.localName" class="muted" data-testid="local-device">
       {{ t("device.local", { name: store.localName }) }}
     </p>
+    <p v-if="store.localFingerprint" class="muted" data-testid="local-fingerprint">
+      {{ t("device.fingerprint", { code: store.localFingerprint }) }}
+    </p>
     <p v-if="store.error" class="error" data-testid="device-error">{{ store.error }}</p>
     <p v-if="store.notice" class="notice" data-testid="device-notice">
       {{
@@ -30,6 +33,9 @@
           {{ chat.unreadFor(d.deviceId) }}
         </span>
         <span class="muted">{{ d.addr }}</span>
+        <span class="muted" data-testid="device-fingerprint">
+          {{ t("device.fingerprint", { code: d.fingerprint }) }}
+        </span>
         <button class="link" data-testid="device-open" @click="emit('select', d)">
           {{ t("device.open") }}
         </button>

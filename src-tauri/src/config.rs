@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// 默认设备发现端口（UDP）。
 pub const DEFAULT_DISCOVERY_PORT: u16 = 28100;
@@ -63,16 +63,9 @@ pub fn default_nickname() -> String {
 
 /// 默认下载目录：用户目录下的 Downloads/Chatters（无法定位用户目录时回退当前目录）。
 pub fn default_download_dir() -> String {
-    let mut base = dirs_home().unwrap_or_else(|| PathBuf::from("."));
-    base.push("Downloads");
-    base.push("Chatters");
-    base.to_string_lossy().to_string()
-}
-
-fn dirs_home() -> Option<PathBuf> {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
+    crate::platform::paths::download_dir()
+        .to_string_lossy()
+        .to_string()
 }
 
 /// 配置存储错误。

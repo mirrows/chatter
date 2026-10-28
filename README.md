@@ -19,7 +19,8 @@
   - `11-acceptance-checklist.md` — v1.0.0-rc.1 验收清单
   - `12-milestone-p1-p2-report.md` — P1/P2 报告（文件操作、历史清理、托盘、发布工程）
   - `13-v2-plan.md` — v2 迭代计划（多平台 / 网络与性能 / 完整块级续传）
-- `src-tauri/src/` — Rust 后端：`config` / `discovery` / `protocol` / `session` / `transfer` / `commands`
+  - `14-milestone-m6-m10-report.md` — M6 + M10 实施报告（平台层、自动重连、设备指纹、2MB 块）
+- `src-tauri/src/` — Rust 后端：`config` / `discovery` / `platform` / `protocol` / `session` / `transfer` / `commands`
 - `src/` — Vue 3 前端：`views`（设备列表、会话）、`components`、`stores`、`api`、`i18n`
 - `tests/` — 前端统一测试目录（布局见 rules.md R2.2）
 - `src-tauri/tests/` — Rust 集成测试（`tests/<module>/<feature>.rs`，需在 `Cargo.toml` 登记）
@@ -36,8 +37,11 @@
   M3-b 简版续传、空闲超时与断线重试（`retry_transfer`）、速度与剩余时间；
   M4 设置页（昵称/目录/端口/主题/自动接收/自启）、历史持久化与清空、复制消息、托盘与系统通知；
   P0 收尾：手动按 IP 添加设备（F3）、剪贴板粘贴图片（F21）、拖拽发送与文件夹提示（F22/F31）、上下线提示（F4）、文件通知（F51）、单实例；
-  P1/P2：已接收文件打开/定位/另存为（F23）、按会话清空历史（F40）、可选删除已接收文件（F41）、关闭窗口最小化到托盘（F51）、未读徽标（F42）、20MB 预览、NSIS 防火墙钩子与验收清单
-- 下一步：v1 实机验收（`requirements/11-acceptance-checklist.md`）与联网打包/签名；v2 按 `requirements/13-v2-plan.md` 启动（M6 跨平台地基 → M7∥M8 → M10 → M11 → M9）
+  P1/P2：已接收文件打开/定位/另存为（F23）、按会话清空历史（F40）、可选删除已接收文件（F41）、关闭窗口最小化到托盘（F51）、未读徽标（F42）、20MB 预览、NSIS 防火墙钩子与验收清单；
+  v2 第一批（M6 代码部分 + M10）：`platform` 平台能力层与按平台打包配置、三平台 CI 矩阵、
+  断线自动重连（5/15/30s，事件与界面状态）、设备指纹（`A3F2-91C0`）、`chunk2m` 协商的 2MB 块（loopback 36.6 → 61.6/66.5 MiB/s）
+- 下一步：v1 实机验收（`requirements/11-acceptance-checklist.md`）与联网打包/签名；
+  v2 剩余：M11 完整块级续传 → M7/M8 实机构建 → M9 Android（见 `requirements/13-v2-plan.md`、`14-milestone-m6-m10-report.md`）
 
 ## 数据与文件位置
 

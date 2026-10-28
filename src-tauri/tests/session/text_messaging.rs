@@ -47,21 +47,21 @@ async fn text_delivery_between_two_hubs() {
     let port_b = free_tcp_port().await;
     let port_a = free_tcp_port().await;
 
-    let (_hub_b, mut events_b, task_b) = start_session(SessionConfig {
-        device_id: "device-b".to_string(),
-        name: "PC-b".to_string(),
-        tcp_port: port_b,
-        ack_timeout: Duration::from_secs(1),
-    })
+    let (_hub_b, mut events_b, task_b) = start_session(SessionConfig::new(
+        "device-b",
+        "PC-b",
+        port_b,
+        Duration::from_secs(1),
+    ))
     .await
     .expect("start session b");
 
-    let (hub_a, _events_a, task_a) = start_session(SessionConfig {
-        device_id: "device-a".to_string(),
-        name: "PC-a".to_string(),
-        tcp_port: port_a,
-        ack_timeout: Duration::from_secs(1),
-    })
+    let (hub_a, _events_a, task_a) = start_session(SessionConfig::new(
+        "device-a",
+        "PC-a",
+        port_a,
+        Duration::from_secs(1),
+    ))
     .await
     .expect("start session a");
 
@@ -125,12 +125,12 @@ async fn missing_ack_marks_send_failed() {
     });
 
     let port = free_tcp_port().await;
-    let (hub, _events, task) = start_session(SessionConfig {
-        device_id: "device-a".to_string(),
-        name: "PC-a".to_string(),
-        tcp_port: port,
-        ack_timeout: Duration::from_millis(200),
-    })
+    let (hub, _events, task) = start_session(SessionConfig::new(
+        "device-a",
+        "PC-a",
+        port,
+        Duration::from_millis(200),
+    ))
     .await
     .expect("start session");
 
@@ -157,12 +157,12 @@ async fn invalid_handshake_is_rejected() {
     });
 
     let port = free_tcp_port().await;
-    let (hub, _events, task) = start_session(SessionConfig {
-        device_id: "device-a".to_string(),
-        name: "PC-a".to_string(),
-        tcp_port: port,
-        ack_timeout: Duration::from_millis(200),
-    })
+    let (hub, _events, task) = start_session(SessionConfig::new(
+        "device-a",
+        "PC-a",
+        port,
+        Duration::from_millis(200),
+    ))
     .await
     .expect("start session");
 
@@ -177,12 +177,12 @@ async fn invalid_handshake_is_rejected() {
 #[tokio::test]
 async fn send_without_connection_returns_error() {
     let port = free_tcp_port().await;
-    let (hub, _events, task) = start_session(SessionConfig {
-        device_id: "device-a".to_string(),
-        name: "PC-a".to_string(),
-        tcp_port: port,
-        ack_timeout: Duration::from_millis(200),
-    })
+    let (hub, _events, task) = start_session(SessionConfig::new(
+        "device-a",
+        "PC-a",
+        port,
+        Duration::from_millis(200),
+    ))
     .await
     .expect("start session");
 
@@ -200,21 +200,21 @@ async fn session_events_carry_peer_identity() {
     let port_b = free_tcp_port().await;
     let port_a = free_tcp_port().await;
 
-    let (_hub_b, mut events_b, task_b) = start_session(SessionConfig {
-        device_id: "device-b".to_string(),
-        name: "PC-b".to_string(),
-        tcp_port: port_b,
-        ack_timeout: Duration::from_secs(1),
-    })
+    let (_hub_b, mut events_b, task_b) = start_session(SessionConfig::new(
+        "device-b",
+        "PC-b",
+        port_b,
+        Duration::from_secs(1),
+    ))
     .await
     .expect("start session b");
 
-    let (hub_a, mut events_a, task_a) = start_session(SessionConfig {
-        device_id: "device-a".to_string(),
-        name: "PC-a".to_string(),
-        tcp_port: port_a,
-        ack_timeout: Duration::from_secs(1),
-    })
+    let (hub_a, mut events_a, task_a) = start_session(SessionConfig::new(
+        "device-a",
+        "PC-a",
+        port_a,
+        Duration::from_secs(1),
+    ))
     .await
     .expect("start session a");
 

@@ -36,6 +36,11 @@ name = "text_messaging"
 path = "tests/session/text_messaging.rs"
 
 [[test]]
+name = "session_reconnect"
+path = "tests/session/reconnect.rs"
+
+
+[[test]]
 name = "file_transfer"
 path = "tests/transfer/file_transfer.rs"
 

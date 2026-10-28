@@ -21,6 +21,11 @@ pub const DEFAULT_ACK_TIMEOUT: Duration = Duration::from_secs(3);
 /// 心跳发送间隔（设计 4.2）。
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
+/// 本机声明的能力（v2）。`chunkmap` 在 M11 实现后加入，避免对端发送无法处理的帧。
+pub const LOCAL_FEATURES: &[&str] = &["chunk2m"];
+/// 自动重连退避间隔（秒），最多尝试 3 次（v2/M10）。
+pub const RECONNECT_DELAYS: [u64; 3] = [5, 15, 30];
+
 /// 会话层配置。
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
@@ -32,6 +37,24 @@ pub struct SessionConfig {
     pub tcp_port: u16,
     /// ACK 等待时长（测试可缩短）。
     pub ack_timeout: Duration,
+    /// 能力声明（默认 `LOCAL_FEATURES`）。
+    pub features: Vec<String>,
+    /// 自动重连退避间隔（秒）；测试可缩短，默认 `RECONNECT_DELAYS`。
+    pub reconnect_delays: Vec<u64>,
+}
+
+impl SessionConfig {
+    /// 以默认能力声明创建配置。
+    pub fn new(device_id: &str, name: &str, tcp_port: u16, ack_timeout: Duration) -> Self {
+        Self {
+            device_id: device_id.to_string(),
+            name: name.to_string(),
+            tcp_port,
+            ack_timeout,
+            features: LOCAL_FEATURES.iter().map(|f| f.to_string()).collect(),
+            reconnect_delays: RECONNECT_DELAYS.to_vec(),
+        }
+    }
 }
 
 /// 会话事件，由 Tauri 层转成前端事件。
@@ -68,6 +91,18 @@ pub enum SessionEvent {
         device_id: String,
         /// 原始帧。
         frame: Frame,
+    },
+    /// 断线后正在尝试自动重连（v2/M10）。
+    PeerReconnecting {
+        /// 对端设备 ID。
+        device_id: String,
+        /// 第几次尝试（从 1 开始）。
+        attempt: u32,
+    },
+    /// 自动重连全部失败（v2/M10）。
+    PeerReconnectFailed {
+        /// 对端设备 ID。
+        device_id: String,
     },
 }
 
@@ -135,9 +170,11 @@ impl From<ProtocolError> for SessionError {
     }
 }
 
-/// 对端连接句柄：写入通道。
+/// 对端连接句柄：写入通道 + 能力 + 重连地址。
 struct PeerHandle {
     sender: mpsc::Sender<Frame>,
+    features: Vec<String>,
+    reconnect_addr: Option<SocketAddr>,
 }
 
 /// 已握手完成的对端信息。
@@ -152,7 +189,10 @@ pub struct PeerInfo {
 struct HubInner {
     device_id: String,
     name: String,
+    local_tcp_port: u16,
+    features: Vec<String>,
     ack_timeout: Duration,
+    reconnect_delays: Vec<u64>,
     peers: Mutex<HashMap<String, PeerHandle>>,
     pending_acks: Mutex<HashMap<String, oneshot::Sender<()>>>,
     events: mpsc::Sender<SessionEvent>,
@@ -190,7 +230,10 @@ pub async fn start_session(
     let inner = Arc::new(HubInner {
         device_id: config.device_id,
         name: config.name,
+        local_tcp_port: config.tcp_port,
+        features: config.features,
         ack_timeout: config.ack_timeout,
+        reconnect_delays: config.reconnect_delays,
         peers: Mutex::new(HashMap::new()),
         pending_acks: Mutex::new(HashMap::new()),
         events: event_tx,
@@ -327,6 +370,17 @@ impl SessionHub {
         self.inner.peers.lock().await.contains_key(peer_id)
     }
 
+    /// 对端声明的能力（v2）。未连接或 v1 对端返回空列表。
+    pub async fn peer_features(&self, peer_id: &str) -> Vec<String> {
+        self.inner
+            .peers
+            .lock()
+            .await
+            .get(peer_id)
+            .map(|p| p.features.clone())
+            .unwrap_or_default()
+    }
+
     /// 向指定对端发送任意帧（传输模块复用同一连接）。
     pub async fn send_frame(&self, peer_id: &str, frame: Frame) -> Result<(), SessionError> {
         self.inner.send_frame(peer_id, frame).await
@@ -380,8 +434,16 @@ async fn establish(
 ) -> Result<PeerInfo, SessionError> {
     let (mut reader, mut writer) = stream.into_split();
 
-    // 双向 HELLO：先发本机身份，再等对端身份。
-    let hello = Frame::json(FrameType::Hello, &Hello::new(&inner.device_id, &inner.name))?;
+    // 双向 HELLO：先发本机身份（含能力声明与监听端口），再等对端身份。
+    let hello = Frame::json(
+        FrameType::Hello,
+        &Hello::with_features(
+            &inner.device_id,
+            &inner.name,
+            inner.features.clone(),
+            inner.local_tcp_port,
+        ),
+    )?;
     write_frame(&mut writer, &hello).await?;
 
     let first = read_frame(&mut reader)
@@ -392,13 +454,19 @@ async fn establish(
     }
     let peer: Hello = first.parse_json()?;
 
+    // v2 对端会告知监听端口；v1 对端没有该字段，无法自动重连（不影响其它功能）。
+    let reconnect_addr = peer.tcp_port.map(|port| SocketAddr::new(addr.ip(), port));
+
     // 写入任务：通道关闭即退出（PeerHandle 被移除时发送端随之释放）。
     let (tx, mut rx) = mpsc::channel::<Frame>(64);
-    inner
-        .peers
-        .lock()
-        .await
-        .insert(peer.device_id.clone(), PeerHandle { sender: tx });
+    inner.peers.lock().await.insert(
+        peer.device_id.clone(),
+        PeerHandle {
+            sender: tx,
+            features: peer.features.clone(),
+            reconnect_addr,
+        },
+    );
 
     tokio::spawn(async move {
         while let Some(frame) = rx.recv().await {
@@ -427,11 +495,20 @@ async fn establish(
                 }
             }
         }
-        reader_inner.peers.lock().await.remove(&peer_id);
+        let reconnect_addr = {
+            let mut peers = reader_inner.peers.lock().await;
+            peers.remove(&peer_id).and_then(|p| p.reconnect_addr)
+        };
         let _ = reader_inner
             .events
-            .send(SessionEvent::PeerDisconnected { device_id: peer_id })
+            .send(SessionEvent::PeerDisconnected {
+                device_id: peer_id.clone(),
+            })
             .await;
+        // v2 对端：后台按 5/15/30s 退避重连（M10）；若期间已有新连接则直接放弃。
+        if let Some(addr) = reconnect_addr {
+            spawn_reconnect(reader_inner.clone(), peer_id, addr);
+        }
     });
 
     let _ = inner
@@ -447,4 +524,41 @@ async fn establish(
         device_id: peer.device_id,
         name: peer.name,
     })
+}
+
+/// 断线后按 `RECONNECT_DELAYS` 退避重连（v2/M10）。
+///
+/// 停止条件：已有新的连接（手工重连或对端主动连入）、或三次尝试全部失败。
+fn spawn_reconnect(inner: Arc<HubInner>, peer_id: String, addr: SocketAddr) {
+    tokio::spawn(async move {
+        let delays = inner.reconnect_delays.clone();
+        for (index, delay) in delays.iter().enumerate() {
+            tokio::time::sleep(Duration::from_secs(*delay)).await;
+            if inner.peers.lock().await.contains_key(&peer_id) {
+                return;
+            }
+            let attempt = index as u32 + 1;
+            let _ = inner
+                .events
+                .send(SessionEvent::PeerReconnecting {
+                    device_id: peer_id.clone(),
+                    attempt,
+                })
+                .await;
+            match TcpStream::connect(addr).await {
+                Ok(stream) => match establish(inner.clone(), stream, addr).await {
+                    Ok(_) => {
+                        log::info!("session reconnected to {peer_id}");
+                        return;
+                    }
+                    Err(e) => log::warn!("reconnect handshake failed for {peer_id}: {e}"),
+                },
+                Err(e) => log::warn!("reconnect attempt {attempt} to {peer_id} failed: {e}"),
+            }
+        }
+        let _ = inner
+            .events
+            .send(SessionEvent::PeerReconnectFailed { device_id: peer_id })
+            .await;
+    });
 }

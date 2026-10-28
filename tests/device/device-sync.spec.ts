@@ -26,6 +26,7 @@ const peer: DeviceEntry = {
   name: "PC-peer",
   addr: "192.168.1.20:28101",
   tcpPort: 28101,
+  fingerprint: "AAAA-BBBB-CCCC-DDDD",
 };
 
 const local: LocalDevice = {
@@ -33,6 +34,7 @@ const local: LocalDevice = {
   name: "PC-self",
   discoveryPort: 28100,
   tcpPort: 28101,
+  fingerprint: "1111-2222-3333-4444",
 };
 
 describe("device store init", () => {

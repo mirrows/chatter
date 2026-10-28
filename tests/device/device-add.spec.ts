@@ -31,6 +31,7 @@ const peer: DeviceEntry = {
   name: "PC-8f3a",
   addr: "192.168.1.10:28101",
   tcpPort: 28101,
+  fingerprint: "AAAA-BBBB-CCCC-DDDD",
 };
 
 describe("device add & notice", () => {

@@ -58,12 +58,12 @@ async fn spawn_node_with_timeout(
     idle_timeout: Duration,
 ) -> (TransferManager, SessionHub, u16) {
     let port = free_tcp_port().await;
-    let (hub, mut events, _task) = start_session(SessionConfig {
-        device_id: device_id.to_string(),
-        name: name.to_string(),
-        tcp_port: port,
-        ack_timeout: Duration::from_secs(1),
-    })
+    let (hub, mut events, _task) = start_session(SessionConfig::new(
+        device_id,
+        name,
+        port,
+        Duration::from_secs(1),
+    ))
     .await
     .expect("start session");
 
@@ -594,6 +594,68 @@ async fn throughput_256mb() {
         &sent.transfer_id,
         TransferState::Done,
         Duration::from_secs(180),
+    )
+    .await;
+    let elapsed = started.elapsed();
+
+    let mib = SIZE as f64 / (1024.0 * 1024.0);
+    println!(
+        "throughput: {:.1} MiB/s ({} MiB in {:.2}s, includes sha256 pre-hash)",
+        mib / elapsed.as_secs_f64(),
+        mib,
+        elapsed.as_secs_f64()
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// 1GB 吞吐基准（默认忽略，M10 验证用）：
+/// `cargo test --release --offline --test file_transfer throughput_1gb -- --ignored --nocapture`
+#[tokio::test]
+#[ignore = "benchmark: run manually with --ignored --nocapture"]
+async fn throughput_1gb() {
+    const SIZE: usize = 1024 * 1024 * 1024;
+    let root = temp_root("bench1g");
+    let dir_a = root.join("a");
+    let dir_b = root.join("b");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
+
+    let (manager_a, _hub_a, port_a) = spawn_node("device-a", "PC-a", dir_a.clone()).await;
+    let (manager_b, hub_b, _port_b) = spawn_node("device-b", "PC-b", dir_b.clone()).await;
+    hub_b.connect(loopback(port_a)).await.expect("connect a");
+
+    let source = dir_b.join("bench-1g.bin");
+    std::fs::write(&source, vec![0xCDu8; SIZE]).unwrap();
+
+    let started = std::time::Instant::now();
+    let sent = manager_b
+        .send_file("device-a", &source)
+        .await
+        .expect("send 1GB file");
+    wait_state_within(
+        &manager_a,
+        &sent.transfer_id,
+        TransferState::Pending,
+        Duration::from_secs(30),
+    )
+    .await;
+    manager_a
+        .accept(&sent.transfer_id)
+        .await
+        .expect("accept 1GB file");
+    wait_state_within(
+        &manager_a,
+        &sent.transfer_id,
+        TransferState::Done,
+        Duration::from_secs(600),
+    )
+    .await;
+    wait_state_within(
+        &manager_b,
+        &sent.transfer_id,
+        TransferState::Done,
+        Duration::from_secs(600),
     )
     .await;
     let elapsed = started.elapsed();

@@ -8,6 +8,7 @@
 
 use crate::config::AppConfig;
 use crate::discovery::{DeviceEntry, DiscoveryEvent};
+use crate::platform::shell::{open_command, reveal_command};
 use crate::session::{SendStatus, SessionHub};
 use crate::storage::{now_millis, History, HistoryStore, StoredMessage};
 use crate::transfer::{TransferInfo, TransferManager};
@@ -41,6 +42,8 @@ pub struct DeviceDto {
     pub addr: String,
     /// 对端 TCP 通信端口。
     pub tcp_port: u16,
+    /// 设备指纹（v2/M10）：device_id 的 SHA-256 前 8 字节，供人工核对。
+    pub fingerprint: String,
 }
 
 impl From<&DeviceEntry> for DeviceDto {
@@ -50,8 +53,19 @@ impl From<&DeviceEntry> for DeviceDto {
             name: entry.name.clone(),
             addr: entry.addr.to_string(),
             tcp_port: entry.tcp_port,
+            fingerprint: fingerprint(&entry.device_id),
         }
     }
+}
+
+/// 计算设备指纹：`device_id` 的 SHA-256 前 4 字节，按 2 组 4 位大写十六进制展示。
+///
+/// 例：`A3F2-91C0`（对应 `13-v2-plan.md` §7.2）。仅用于人工核对身份，不替代加密。
+pub fn fingerprint(device_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(device_id.as_bytes());
+    let hex: String = digest[..4].iter().map(|b| format!("{b:02X}")).collect();
+    format!("{}-{}", &hex[0..4], &hex[4..8])
 }
 
 /// 设备表变更事件，通过 Tauri event `device://update` 推送给前端。
@@ -99,6 +113,8 @@ pub struct LocalDeviceDto {
     pub discovery_port: u16,
     /// TCP 通信端口。
     pub tcp_port: u16,
+    /// 本机指纹（v2/M10），便于让对方核对。
+    pub fingerprint: String,
 }
 
 /// 收到的新消息（`message://new` 事件载荷，对应前端 `IncomingMessage`）。
@@ -132,6 +148,18 @@ pub enum SessionUpdate {
     },
     /// 会话断开。
     Disconnected {
+        /// 对端设备 ID。
+        peer_id: String,
+    },
+    /// 正在自动重连（v2/M10）。
+    Reconnecting {
+        /// 对端设备 ID。
+        peer_id: String,
+        /// 第几次尝试（从 1 开始）。
+        attempt: u32,
+    },
+    /// 自动重连失败（v2/M10），需用户手动重连。
+    ReconnectFailed {
         /// 对端设备 ID。
         peer_id: String,
     },
@@ -333,6 +361,7 @@ pub async fn get_local_device(state: tauri::State<'_, AppState>) -> Result<Local
         name: config.nickname.clone(),
         discovery_port: config.discovery_port,
         tcp_port: config.tcp_port,
+        fingerprint: fingerprint(&config.device_id),
     })
 }
 
@@ -786,6 +815,7 @@ pub async fn add_device_by_ip(
         .map_err(|e| format!("连接失败：{e}"))?;
 
     let dto = DeviceDto {
+        fingerprint: fingerprint(&peer.device_id),
         device_id: peer.device_id,
         name: peer.name,
         addr: target.to_string(),
@@ -897,52 +927,6 @@ async fn received_file_path(state: &AppState, transfer_id: &str) -> Result<PathB
     Ok(path)
 }
 
-/// 用系统默认程序打开文件（F23）。
-fn open_command(path: &Path) -> std::process::Command {
-    #[cfg(target_os = "windows")]
-    {
-        let mut command = std::process::Command::new("cmd");
-        command.arg("/C").arg("start").arg("").arg(path);
-        command
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let mut command = std::process::Command::new("open");
-        command.arg(path);
-        command
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let mut command = std::process::Command::new("xdg-open");
-        command.arg(path);
-        command
-    }
-}
-
-/// 在文件管理器中定位文件（F23）。
-fn reveal_command(path: &Path) -> std::process::Command {
-    #[cfg(target_os = "windows")]
-    {
-        let mut command = std::process::Command::new("explorer");
-        let mut arg = std::ffi::OsString::from("/select,");
-        arg.push(path);
-        command.arg(arg);
-        command
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let mut command = std::process::Command::new("open");
-        command.arg("-R").arg(path);
-        command
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let mut command = std::process::Command::new("xdg-open");
-        command.arg(path.parent().unwrap_or(path));
-        command
-    }
-}
-
 /// 用默认程序打开已接收的文件（F23）。
 #[tauri::command]
 pub async fn open_transfer_file(
@@ -1034,7 +1018,51 @@ mod tests {
             name: name.to_string(),
             addr: "192.168.1.10:28101".to_string(),
             tcp_port: 28101,
+            fingerprint: fingerprint(id),
         }
+    }
+
+    /// 正常路径：指纹稳定、按 2 组 4 位十六进制展示，不同 ID 结果不同（v2/M10）。
+    #[test]
+    fn fingerprint_is_stable_and_grouped() {
+        let code = fingerprint("device-1234");
+        assert_eq!(code, fingerprint("device-1234"));
+        assert_ne!(code, fingerprint("device-1235"));
+        let parts: Vec<&str> = code.split('-').collect();
+        assert_eq!(parts.len(), 2, "code = {code}");
+        assert!(
+            parts
+                .iter()
+                .all(|p| p.len() == 4 && p.chars().all(|c| c.is_ascii_hexdigit())),
+            "code = {code}"
+        );
+    }
+
+    /// 正常路径：设备 DTO 序列化包含 fingerprint（前端用于人工核对）。
+    #[test]
+    fn device_dto_includes_fingerprint() {
+        let json = serde_json::to_value(dto("id-1", "PC-a")).expect("serialize");
+        assert_eq!(json["fingerprint"], serde_json::json!(fingerprint("id-1")));
+    }
+
+    /// 正常路径：重连事件序列化为前端约定的 kind（v2/M10）。
+    #[test]
+    fn session_update_reconnecting_serializes() {
+        let update = SessionUpdate::Reconnecting {
+            peer_id: "peer-1".to_string(),
+            attempt: 2,
+        };
+        let json = serde_json::to_value(update).expect("serialize");
+        assert_eq!(json["kind"], "reconnecting");
+        assert_eq!(json["peerId"], "peer-1");
+        assert_eq!(json["attempt"], 2);
+
+        let failed = SessionUpdate::ReconnectFailed {
+            peer_id: "peer-1".to_string(),
+        };
+        let json = serde_json::to_value(failed).expect("serialize");
+        assert_eq!(json["kind"], "reconnectFailed");
+        assert_eq!(json["peerId"], "peer-1");
     }
 
     /// 正常路径：DiscoveryEvent 转成前端事件结构（camelCase + tag）。
@@ -1133,6 +1161,7 @@ mod tests {
             name: "PC-a".to_string(),
             addr: "192.168.1.10:50000".to_string(),
             tcp_port: 28101,
+            fingerprint: fingerprint("id-1"),
         };
         assert_eq!(
             peer_tcp_addr(&device).map(|a| a.to_string()),
@@ -1148,6 +1177,7 @@ mod tests {
             name: "PC-a".to_string(),
             addr: "not-an-address".to_string(),
             tcp_port: 28101,
+            fingerprint: fingerprint("id-1"),
         };
         assert!(peer_tcp_addr(&device).is_none());
     }
@@ -1234,29 +1264,6 @@ mod tests {
         assert!(parse_manual_addr("   ", 28101).is_err());
         assert!(parse_manual_addr("not-an-ip", 28101).is_err());
         assert!(parse_manual_addr("999.1.1.1", 28101).is_err());
-    }
-
-    /// 正常路径：打开/定位命令选择系统默认程序（F23）。
-    #[test]
-    fn file_commands_use_platform_defaults() {
-        let path = Path::new("C:/tmp/report.pdf");
-        let open = open_command(path);
-        let reveal = reveal_command(path);
-        #[cfg(target_os = "windows")]
-        {
-            assert_eq!(open.get_program().to_string_lossy(), "cmd");
-            assert_eq!(reveal.get_program().to_string_lossy(), "explorer");
-        }
-        #[cfg(target_os = "macos")]
-        {
-            assert_eq!(open.get_program().to_string_lossy(), "open");
-            assert_eq!(reveal.get_program().to_string_lossy(), "open");
-        }
-        #[cfg(all(unix, not(target_os = "macos")))]
-        {
-            assert_eq!(open.get_program().to_string_lossy(), "xdg-open");
-            assert_eq!(reveal.get_program().to_string_lossy(), "xdg-open");
-        }
     }
 
     /// 正常路径：只删除下载目录内的文件（F41 安全约束）。
