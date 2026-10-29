@@ -22,9 +22,12 @@ use commands::{
 };
 use session::{start_session, SessionConfig, SessionEvent, DEFAULT_ACK_TIMEOUT};
 use std::path::Path;
+#[cfg(not(target_os = "android"))]
 use std::path::PathBuf;
 use storage::{now_millis, HistoryStore, StoredMessage, StoredTransfer};
+#[cfg(desktop)]
 use tauri::menu::{Menu, MenuItem};
+#[cfg(desktop)]
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
@@ -89,27 +92,39 @@ fn transfer_notification(info: &TransferInfo) -> Option<&'static str> {
 /// Error handling: `tauri::Error` is returned to the caller (main), which
 /// currently logs and exits non-zero.
 pub fn run() -> Result<(), tauri::Error> {
-    tauri::Builder::default()
-        // 单实例必须在其它插件之前注册（F51：再次启动时聚焦已有窗口）。
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
-        }))
+    let builder = tauri::Builder::default();
+
+    // 单实例必须在其它插件之前注册（F51：再次启动时聚焦已有窗口）。
+    // Android 由系统保证单实例，无需该插件。
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }));
+
+    let builder = builder
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
-        ))
-        // 关闭窗口时最小化到托盘（F51）；真正退出走托盘菜单。
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
-            }
-        })
+        .plugin(tauri_plugin_notification::init());
+
+    // 开机自启仅桌面端可用（F50）。
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_autostart::init(
+        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+        None,
+    ));
+
+    // 关闭窗口时最小化到托盘（F51）；真正退出走托盘菜单。移动端无关闭请求。
+    #[cfg(desktop)]
+    let builder = builder.on_window_event(|window, event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = window.hide();
+        }
+    });
+
+    builder
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let config_path = config_dir.join("config.json");
@@ -131,9 +146,14 @@ pub fn run() -> Result<(), tauri::Error> {
                 )))?;
 
             // 传输中心：接收目录取配置里的下载目录，图片自动接收（F34）。
+            // Android 无用户下载目录（M9 spike）：先落应用私有目录，完成后再由 SAF 导出。
+            #[cfg(target_os = "android")]
+            let receive_dir = app.path().app_data_dir()?.join("downloads");
+            #[cfg(not(target_os = "android"))]
+            let receive_dir = PathBuf::from(cfg.download_dir.clone());
             let (transfer_tx, mut transfer_rx) = tokio::sync::mpsc::channel::<TransferEvent>(64);
             let transfers = TransferManager::new(
-                TransferConfig::new(PathBuf::from(cfg.download_dir.clone()), true),
+                TransferConfig::new(receive_dir, true),
                 hub.clone(),
                 transfer_tx,
             );
@@ -155,30 +175,37 @@ pub fn run() -> Result<(), tauri::Error> {
             app.manage(state);
 
             // 托盘（F51）：显示主窗口 / 退出；双击图标亦显示窗口。
-            // Android 无托盘（M9 改为纯通知），其它平台若缺少图标则跳过。
-            let show_item = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
-            match app.default_window_icon().cloned() {
-                Some(icon) if platform::tray_supported() => {
-                    TrayIconBuilder::with_id("main-tray")
-                        .icon(icon)
-                        .tooltip("Chatters")
-                        .menu(&tray_menu)
-                        .show_menu_on_left_click(true)
-                        .on_menu_event(|app, event| match event.id.as_ref() {
-                            "show" => {
-                                if let Some(window) = app.get_webview_window("main") {
-                                    let _ = window.show();
-                                    let _ = window.set_focus();
+            // Android 无托盘（M9 改为纯通知），因此整块仅在桌面端编译。
+            #[cfg(desktop)]
+            {
+                let show_item = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+                let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+                let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+                match app.default_window_icon().cloned() {
+                    Some(icon) if platform::tray_supported() => {
+                        TrayIconBuilder::with_id("main-tray")
+                            .icon(icon)
+                            .tooltip("Chatters")
+                            .menu(&tray_menu)
+                            .show_menu_on_left_click(true)
+                            .on_menu_event(|app, event| match event.id.as_ref() {
+                                "show" => {
+                                    if let Some(window) = app.get_webview_window("main") {
+                                        let _ = window.show();
+                                        let _ = window.set_focus();
+                                    }
                                 }
-                            }
-                            "quit" => app.exit(0),
-                            _ => {}
-                        })
-                        .build(app)?;
+                                "quit" => app.exit(0),
+                                _ => {}
+                            })
+                            .build(app)?;
+                    }
+                    _ => {
+                        log::warn!(
+                            "tray unavailable on this platform or icon missing, tray disabled"
+                        )
+                    }
                 }
-                _ => log::warn!("tray unavailable on this platform or icon missing, tray disabled"),
             }
 
             // 传输事件 → 前端 transfer://update（含待确认文件）+ 历史落库。
@@ -353,6 +380,17 @@ pub fn run() -> Result<(), tauri::Error> {
             commands::save_transfer_as
         ])
         .run(tauri::generate_context!())
+}
+
+/// Tauri 移动端入口（Android）：`Rust.kt` 通过 JNI 调用 `Rust.onCreate`，由该宏生成桥接代码。
+///
+/// 桌面端不参与编译（`mobile` cfg 由 `tauri-build` 按目标平台注入），
+/// 因此不影响 `main.rs` 的桌面启动流程。
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run_mobile() {
+    if let Err(e) = run() {
+        log::error!("chatters exited with error: {e}");
+    }
 }
 
 #[cfg(test)]

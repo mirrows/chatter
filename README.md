@@ -39,9 +39,11 @@
   P0 收尾：手动按 IP 添加设备（F3）、剪贴板粘贴图片（F21）、拖拽发送与文件夹提示（F22/F31）、上下线提示（F4）、文件通知（F51）、单实例；
   P1/P2：已接收文件打开/定位/另存为（F23）、按会话清空历史（F40）、可选删除已接收文件（F41）、关闭窗口最小化到托盘（F51）、未读徽标（F42）、20MB 预览、NSIS 防火墙钩子与验收清单；
   v2 第一批（M6 代码部分 + M10）：`platform` 平台能力层与按平台打包配置、三平台 CI 矩阵、
-  断线自动重连（5/15/30s，事件与界面状态）、设备指纹（`A3F2-91C0`）、`chunk2m` 协商的 2MB 块（loopback 36.6 → 61.6/66.5 MiB/s）
+  断线自动重连（5/15/30s，事件与界面状态）、设备指纹（`A3F2-91C0`）、`chunk2m` 协商的 2MB 块（loopback 36.6 → 61.6/66.5 MiB/s）；
+  v2 Android spike（M9）：工程门控（桌面插件 `cfg` 隔离 + `mobile_entry_point`）、`gen/android` 工程、
+  模拟器 API 36 上构建/安装/启动并用手动 IP 打通文字双向收发（详见 `requirements/15-m9-spike-plan.md`）
 - 下一步：v1 实机验收（`requirements/11-acceptance-checklist.md`）与联网打包/签名；
-  v2 剩余：M11 完整块级续传 → M7/M8 实机构建 → M9 Android（见 `requirements/13-v2-plan.md`、`14-milestone-m6-m10-report.md`）
+  v2 剩余：M11 完整块级续传 → M7/M8 实机构建 → M9 原生能力（MulticastLock / 前台服务 / SAF）+ 真机验收
 
 ## 数据与文件位置
 

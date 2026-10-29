@@ -17,6 +17,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
+#[cfg(desktop)]
 use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tauri_plugin_dialog::DialogExt;
 use tokio::sync::RwLock;
@@ -502,21 +503,39 @@ pub async fn clear_history(
 }
 
 /// 是否已开启开机自启（F50）。
+///
+/// Android 无“开机自启”概念（M9），恒返回未启用，前端开关不生效。
 #[tauri::command]
 pub fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
-    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+    #[cfg(desktop)]
+    {
+        app.autolaunch().is_enabled().map_err(|e| e.to_string())
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = app;
+        Ok(false)
+    }
 }
 
-/// 设置开机自启（F50）。
+/// 设置开机自启（F50）；Android 上为空操作。
 #[tauri::command]
 pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
-    let manager = app.autolaunch();
-    let result = if enabled {
-        manager.enable()
-    } else {
-        manager.disable()
-    };
-    result.map_err(|e| e.to_string())
+    #[cfg(desktop)]
+    {
+        let manager = app.autolaunch();
+        let result = if enabled {
+            manager.enable()
+        } else {
+            manager.disable()
+        };
+        result.map_err(|e| e.to_string())
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = (app, enabled);
+        Ok(())
+    }
 }
 
 /// 由发现结果推导对端 TCP 地址。

@@ -11,14 +11,23 @@ pub fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// 默认下载目录：`<home>/Downloads/Chatters`；无法定位主目录时回退当前目录。
+/// 默认下载目录。
 ///
-/// Android 端不使用该目录（v2/M9 走应用私有目录 + SAF 导出）。
+/// - 桌面：`<home>/Downloads/Chatters`（无法定位主目录时回退当前目录）；
+/// - Android：无用户下载目录，返回相对子目录名 `downloads`，由 `lib.rs` 用
+///   `app_data_dir()` 拼成应用私有目录（M9 spike；后续由 SAF 导出，见 `13-v2-plan.md` §9.2）。
 pub fn download_dir() -> PathBuf {
-    let mut base = home_dir().unwrap_or_else(|| PathBuf::from("."));
-    base.push("Downloads");
-    base.push("Chatters");
-    base
+    #[cfg(target_os = "android")]
+    {
+        PathBuf::from("downloads")
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let mut base = home_dir().unwrap_or_else(|| PathBuf::from("."));
+        base.push("Downloads");
+        base.push("Chatters");
+        base
+    }
 }
 
 #[cfg(test)]

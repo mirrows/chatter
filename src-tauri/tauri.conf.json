@@ -37,6 +37,9 @@
       "nsis": {
         "installerHooks": "nsis/installer-hooks.nsh"
       }
+    },
+    "android": {
+      "minSdkVersion": 24
     }
   }
 }
