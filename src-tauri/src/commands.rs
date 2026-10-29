@@ -8,6 +8,7 @@
 
 use crate::config::AppConfig;
 use crate::discovery::{DeviceEntry, DiscoveryEvent};
+#[cfg(not(target_os = "android"))]
 use crate::platform::shell::{open_command, reveal_command};
 use crate::session::{SendStatus, SessionHub};
 use crate::storage::{now_millis, History, HistoryStore, StoredMessage};
@@ -953,10 +954,26 @@ pub async fn open_transfer_file(
     transfer_id: String,
 ) -> Result<(), String> {
     let path = received_file_path(&state, &transfer_id).await?;
-    open_command(&path)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("无法打开文件：{e}"))
+
+    // Android（M9）：没有 xdg-open，改用 FileProvider + ACTION_VIEW 拉起系统查看器。
+    #[cfg(target_os = "android")]
+    {
+        let path_text = path.to_string_lossy().to_string();
+        return tauri::async_runtime::spawn_blocking(move || {
+            crate::platform::android::open_file(&path_text)
+        })
+        .await
+        .map_err(|e| format!("无法打开文件：{e}"))?
+        .map_err(|e| format!("无法打开文件：{e}"));
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        open_command(&path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("无法打开文件：{e}"))
+    }
 }
 
 /// 在资源管理器中定位已接收的文件（F23）。
@@ -966,10 +983,21 @@ pub async fn reveal_transfer_file(
     transfer_id: String,
 ) -> Result<(), String> {
     let path = received_file_path(&state, &transfer_id).await?;
-    reveal_command(&path)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("无法打开文件夹：{e}"))
+
+    // Android 没有“在文件管理器中定位”的概念，引导用户用另存为导出。
+    #[cfg(target_os = "android")]
+    {
+        let _ = path;
+        return Err("Android 不支持定位文件，请使用「另存为」保存到手机存储".to_string());
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        reveal_command(&path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("无法打开文件夹：{e}"))
+    }
 }
 
 /// 另存为：选择目标路径后复制文件（F23），取消时返回 null。
@@ -985,23 +1013,42 @@ pub async fn save_transfer_as(
         .and_then(|name| name.to_str())
         .unwrap_or("chatters-file")
         .to_string();
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .set_file_name(default_name)
-        .save_file(move |picked| {
-            let _ = tx.send(picked);
-        });
-    let picked = rx.await.map_err(|_| "保存对话框已关闭".to_string())?;
-    match picked {
-        Some(file) => {
-            let target = file.into_path().map_err(|e| e.to_string())?;
-            tokio::fs::copy(&source, &target)
-                .await
-                .map_err(|e| format!("保存失败：{e}"))?;
-            Ok(Some(target.to_string_lossy().to_string()))
+
+    // Android（M9）：走 SAF（ACTION_CREATE_DOCUMENT）导出到用户选择的目录，
+    // 私有目录里的原文件保留，便于再次导出或预览。
+    #[cfg(target_os = "android")]
+    {
+        let _ = &app;
+        let path_text = source.to_string_lossy().to_string();
+        let file_name = default_name.clone();
+        return tauri::async_runtime::spawn_blocking(move || {
+            crate::platform::android::save_file(&path_text, &file_name)
+        })
+        .await
+        .map_err(|e| format!("保存失败：{e}"))?
+        .map_err(|e| format!("保存失败：{e}"));
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.dialog()
+            .file()
+            .set_file_name(default_name)
+            .save_file(move |picked| {
+                let _ = tx.send(picked);
+            });
+        let picked = rx.await.map_err(|_| "保存对话框已关闭".to_string())?;
+        match picked {
+            Some(file) => {
+                let target = file.into_path().map_err(|e| e.to_string())?;
+                tokio::fs::copy(&source, &target)
+                    .await
+                    .map_err(|e| format!("保存失败：{e}"))?;
+                Ok(Some(target.to_string_lossy().to_string()))
+            }
+            None => Ok(None),
         }
-        None => Ok(None),
     }
 }
 

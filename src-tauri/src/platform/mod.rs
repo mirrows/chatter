@@ -6,6 +6,9 @@
 pub mod paths;
 pub mod shell;
 
+#[cfg(target_os = "android")]
+pub mod android;
+
 /// 判断文件名是否可在当前平台安全落盘。
 ///
 /// 通用规则（rules.md R5.2）：

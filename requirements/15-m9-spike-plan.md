@@ -165,3 +165,52 @@ cd src-tauri; npx tauri android dev      # 或 npx tauri android run --target x8
   2. 前台服务 + 通知渠道，避免切后台被杀；
   3. SAF（`ACTION_CREATE_DOCUMENT`）导出，替换“私有目录直写”。
 - 本次 spike **未验证**：广播发现、锁屏保活、1 GB SAF 导出——均需真机（`13` §9.3 验收标准）。
+
+## 8. M9 原生能力实现（①②③④，2026-10-29）
+
+按 `① MulticastLock → ③ SAF/打开文件 → ④ 通知权限 → ② 前台服务` 的顺序全部实现，并在模拟器上逐项验证。
+
+### 8.1 代码结构
+
+| 层次 | 文件 | 职责 |
+|---|---|---|
+| Rust 桥 | `src-tauri/src/platform/android.rs` | 用 `PluginHandle::run_mobile_plugin` 调 Kotlin：`ping` / `acquireMulticastLock` / `releaseMulticastLock` / `openFile` / `saveFile` / `startForegroundService` / `stopForegroundService` |
+| Rust 注册 | `src-tauri/src/lib.rs` | `tauri::plugin::Builder::<Wry, ()>::new("chatters-android")` + `api.register_android_plugin("com.chatters.app", "ChattersAndroidPlugin")`；启动后申请组播锁；传输事件驱动前台服务；`run_mobile()` 初始化 `env_logger`（Android 无 `main.rs`） |
+| 命令层 | `src-tauri/src/commands.rs` | `open_transfer_file` → FileProvider + `ACTION_VIEW`；`save_transfer_as` → SAF；`reveal_transfer_file` → 明确提示“Android 不支持定位” |
+| Kotlin 插件 | `gen/android/.../ChattersAndroidPlugin.kt` | 上述 7 个 `@Command` + `@ActivityCallback saveFileResult`（复制到用户选择的 Uri） |
+| Kotlin 服务 | `gen/android/.../TransferService.kt` | `dataSync` 前台服务 + 低优先级常驻通知，`onDestroy` 摘通知 |
+| Manifest | `AndroidManifest.xml` | `CHANGE_WIFI_MULTICAST_STATE`、`ACCESS_WIFI_STATE/NETWORK_STATE`、`POST_NOTIFICATIONS`、`FOREGROUND_SERVICE(_DATA_SYNC)`；声明 `.TransferService` |
+| 启动项 | `MainActivity.kt` | Android 13+ 首次启动申请通知权限；插件由 Rust 注册（Kotlin 侧无 `registerPlugin`） |
+| 共享路径 | `res/xml/file_paths.xml` | 新增 `<files-path>`，让 `app_data_dir/downloads` 可被 FileProvider 暴露 |
+
+### 8.2 模拟器实测（API 36 / x86_64）
+
+| 能力 | 验证方式 | 结果 |
+|---|---|---|
+| ① MulticastLock | `adb logcat` | ✅ `WifiService: acquireMulticastLock uid=10217 tag=chatters-discovery` |
+| ④ 通知权限 | 首启弹窗 | ✅ 出现「Allow Chatters to send you notifications?」，允许后 `POST_NOTIFICATIONS` granted |
+| ② 前台服务 | 传输期间 `logcat` / `dumpsys` | ✅ `Background started FGS: Allowed … com.chatters.app/.TransferService`，传输结束自动停止 |
+| ③ 文件接收 | PC → Android 图片 | ✅ 10529 字节 `done`，会话内显示预览 |
+| ③ SAF 导出 | 卡片「另存为」 | ✅ 弹出 DocumentsUI（`PickActivity`，默认 Downloads，文件名预填 `chatters-128.png`），保存后 `/sdcard/Download/chatters-128.png` 为 10529 字节 |
+| ③ 打开文件 | 卡片「打开文件」 | ✅ 调起 Google Photos（`FileProvider` + `ACTION_VIEW` 生效） |
+| ③ 定位文件 | 卡片「打开所在文件夹」 | ⚠️ 按设计返回提示「Android 不支持定位文件，请使用「另存为」」 |
+| M10 重连 | 杀探测端后重启 | ✅ 界面显示「正在重连…（第 1 次）」 |
+
+> 说明：模拟器 NAT 会丢弃 `255.255.255.255` 广播，**广播发现本身仍需真机验证**；本轮只验证了“锁已持有”这一必要条件。
+
+### 8.3 已知限制（真机验收时关注）
+
+1. 组播锁随进程存活，未在切后台时释放（后续可改成前后台切换时 acquire/release）；
+2. 前台服务仅在“有传输任务”时启动，空闲时不常驻——符合省电要求，但**应用被系统杀死后不会自动恢复**；
+3. SAF 导出是“复制”语义：私有目录原件保留，导出后不自动删除；
+4. 通知权限若被用户拒绝，传输完成提醒不会出现（不影响传输本身）；
+5. Android 端仍无「打开所在文件夹」，UI 按钮保留但会给出提示，后续可考虑按平台隐藏。
+
+### 8.4 真机验收清单（待设备）
+
+- [ ] 同一 Wi-Fi 下 15 s 内自动发现 PC（组播锁生效）
+- [ ] AP 隔离网络下用手动 IP 仍可建连（兜底路径）
+- [ ] 传输中切后台 / 锁屏 10 分钟不中断，通知栏可见常驻通知
+- [ ] 1 GB 文件接收 → SAF 导出到用户目录，重名不覆盖
+- [ ] 拒绝通知权限时传输仍正常，仅无提醒
+- [ ] Android 11 / 13 / 14 各一台（OEM 后台策略差异）

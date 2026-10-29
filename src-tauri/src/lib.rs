@@ -108,6 +108,23 @@ pub fn run() -> Result<(), tauri::Error> {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init());
 
+    // Android 原生能力插件（M9）：MulticastLock / SAF / 前台服务。
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(
+        tauri::plugin::Builder::<tauri::Wry, ()>::new(platform::android::PLUGIN_NAME)
+            .setup(|_app, api| {
+                let handle = api
+                    .register_android_plugin(
+                        platform::android::PLUGIN_PACKAGE,
+                        platform::android::PLUGIN_CLASS,
+                    )
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                platform::android::init(handle);
+                Ok(())
+            })
+            .build(),
+    );
+
     // 开机自启仅桌面端可用（F50）。
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_autostart::init(
@@ -163,6 +180,8 @@ pub fn run() -> Result<(), tauri::Error> {
                 maintenance.spawn_maintenance();
             });
             let transfer_router = transfers.clone();
+            #[cfg(target_os = "android")]
+            let transfer_watch = transfers.clone();
 
             let state = AppState::new(
                 cfg.clone(),
@@ -208,9 +227,21 @@ pub fn run() -> Result<(), tauri::Error> {
                 }
             }
 
+            // Android（M9）：持有 Wi-Fi 组播锁，否则省电策略会过滤 UDP 广播，
+            // 导致「设备列表一直为空」。失败只降级为手动 IP 添加，不阻塞启动。
+            #[cfg(target_os = "android")]
+            match platform::android::acquire_multicast_lock() {
+                Ok(()) => log::info!("multicast lock acquired"),
+                Err(e) => {
+                    log::warn!("failed to acquire multicast lock, discovery may miss peers: {e}")
+                }
+            }
+
             // 传输事件 → 前端 transfer://update（含待确认文件）+ 历史落库。
             let transfer_handle = app.handle().clone();
             let transfer_history = history.clone();
+            #[cfg(target_os = "android")]
+            let mut foreground_running = false;
             tauri::async_runtime::spawn(async move {
                 while let Some(TransferEvent::Updated(info)) = transfer_rx.recv().await {
                     let payload = TransferDto::from(&info);
@@ -236,6 +267,36 @@ pub fn run() -> Result<(), tauri::Error> {
                     }
                     if let Some(body) = transfer_notification(&info) {
                         notify_if_unfocused(&transfer_handle, body);
+                    }
+
+                    // Android（M9）：传输期间启动前台服务，避免切后台/锁屏被挂起；
+                    // 全部结束后再停止，避免常驻通知打扰用户。
+                    #[cfg(target_os = "android")]
+                    {
+                        let active = transfer_watch.list().await.iter().any(|task| {
+                            matches!(
+                                task.state,
+                                TransferState::Transferring
+                                    | TransferState::Offered
+                                    | TransferState::Pending
+                            )
+                        });
+                        match (active, foreground_running) {
+                            (true, false) => match platform::android::start_foreground(
+                                "Chatters 正在传输",
+                                "保持连接，退出应用前请先完成传输",
+                            ) {
+                                Ok(()) => foreground_running = true,
+                                Err(e) => log::warn!("failed to start foreground service: {e}"),
+                            },
+                            (false, true) => {
+                                if let Err(e) = platform::android::stop_foreground() {
+                                    log::warn!("failed to stop foreground service: {e}");
+                                }
+                                foreground_running = false;
+                            }
+                            _ => {}
+                        }
                     }
                 }
             });
@@ -388,6 +449,9 @@ pub fn run() -> Result<(), tauri::Error> {
 /// 因此不影响 `main.rs` 的桌面启动流程。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run_mobile() {
+    // Android 没有 main.rs，日志需在这里初始化；默认 info 级别，便于 `adb logcat -s RustStdoutStderr` 排障。
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .try_init();
     if let Err(e) = run() {
         log::error!("chatters exited with error: {e}");
     }
