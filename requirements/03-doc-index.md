@@ -16,11 +16,13 @@
 | 08 | `08-milestone-m5-report.md` | M5 报告（打包与交付） | 安装包待联网 |
 | 09 | `09-user-guide.md` | 使用说明（安装、收发、设置、FAQ） | 随功能更新 |
 | 10 | `10-milestone-p0-report.md` | P0 收尾报告（F3/F4/F21/F22/F31/F51、单实例、图标） | 已完成 |
-| 11 | `11-acceptance-checklist.md` | v1.0.0-rc.1 验收清单（自动化 + F1–F53） | 待实机执行 |
+| 11 | `11-acceptance-checklist.md` | v1.0.0-rc.1 验收清单（自动化 + F1–F53） | ✅ 2026-11-14 复验通过（发布项除外） |
 | 12 | `12-milestone-p1-p2-report.md` | P1/P2 报告（文件操作、历史清理、托盘、发布工程） | 已完成 |
-| 13 | `13-v2-plan.md` | v2 迭代计划（多平台 M6–M9、网络与性能 M10、完整续传 M11） | 进行中（M6/M10 已完成） |
+| 13 | `13-v2-plan.md` | v2 迭代计划（多平台 M6–M9、网络与性能 M10、完整续传 M11） | M6/M9/M10 已完成；M7/M8/M11 见 `17` |
 | 14 | `14-milestone-m6-m10-report.md` | M6 + M10 实施报告（平台层、重连、指纹、2MB 块与吞吐） | 已完成 |
-| 15 | `15-m9-spike-plan.md` | M9 Android spike（环境勘察、S0–S3 步骤、实测结论与踩坑）+ 原生四件实现记录 | S0–S2 + ①②③④ 已完成，待真机验收 |
+| 15 | `15-m9-spike-plan.md` | M9 Android spike（环境勘察、S0–S3 步骤、实测结论与踩坑）+ 原生四件实现记录 | ✅ 2026-11-14 真机验收通过（签名/双 ABI 见 `17`） |
+| 16 | `16-v3-plan.md` | v3 UI 重构计划与进度（I0–I6.9、验收清单、产物哈希） | ✅ 已完成并验收 |
+| 17 | `17-v3-followups.md` | 后续迭代与优化项（发布阻塞、功能、性能、已决不做、待决策点） | 维护中（唯一待办入口） |
 
 ## 2. 约定
 
@@ -31,6 +33,11 @@
 
 ## 3. 当前未完成项入口
 
-- 功能/非功能缺口：`01-project-overview.md` §3.5
-- 待执行验收：`11-acceptance-checklist.md`
-- 发布阻塞项（NSIS、签名、ESLint、E2E）：`12-milestone-p1-p2-report.md` §5
+- **后续迭代与优化项（唯一入口）：`17-v3-followups.md`**
+  - 发布/工程阻塞（签名、双 ABI、NSIS、macOS/Linux、CI Android、E2E）
+  - 功能与稳定性（设备上下线提示改 message、M11 块级续传、MulticastLock 前后台、断线自动续传、`resend`）
+  - 性能优化（大图 asset 协议、分享入口）
+  - 已决定不做 / 保持现状的口径记录
+  - 待决策的文档不一致点
+- 功能/非功能缺口（v1 历史口径）：`01-project-overview.md` §3.5
+- 待执行的人工验证：`11-acceptance-checklist.md` C 节、`15` §8.4 剩余两项、`17` §6

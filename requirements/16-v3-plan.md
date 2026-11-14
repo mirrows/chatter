@@ -303,16 +303,18 @@ message({ type: "success" | "error" | "info", text: string, duration = 1500 }): 
     `.so` 9.36 MB，内嵌 `index-FIvlqZkW.js`，并已确认包含新命令（`get_history_page`、`open_download_dir`）。
   - exe：13.09 MB，SHA-256 `9147AB734BA3ABA7F2E6330134B5F7E1DB14ED6E7795204C0E33AE24B160BAB3`；
     PE 子系统 GUI（无控制台），内嵌同一份前端资源。
-- **真机验收清单（待勾选）**：
-  - [ ] 图标：PC 资源管理器/任务栏、Android 启动器均为新 logo
-  - [ ] 时间线：文本/图片/文件按时间混排、左右对齐；120px 方形、图片 contain、文件名中间省略保留后缀
-  - [ ] 气泡：完成后无进度/无「接收·已完成」文案；发送失败左侧重试；接收待确认右侧接受/取消
-  - [ ] 菜单：PC 右键跟随鼠标（贴边翻转）、移动端长按居中；图片菜单仅「另存为」，文件菜单「打开文件+另存为」
-  - [ ] 预览：点击图片 80vw/80vh contain 居中；移动端双指缩放 1–4 倍、关闭复位；全局禁止双指缩放
-  - [ ] 滚动：新增内容置底；上滑时不打断并显示「以下为新消息」（收到的文件除外）；回到底部恢复；滚顶加载更早 100 条且视口不跳
-  - [ ] 复制：气泡无复制按钮，右键/长按菜单复制并弹 1.5s「已复制」
-  - [ ] 设置：下载目录「打开文件夹」（仅桌面）；清空全部历史二次确认，勾选后下载目录文件被清空
-  - [ ] 安全区/键盘：顶部状态栏与底部手势条留白正常，键盘弹出时输入行被顶起
+- **真机验收清单（2026-11-14 Windows + Android 真机复测通过）**：
+  - [x] 图标：PC 资源管理器/任务栏、Android 启动器均为新 logo
+  - [x] 时间线：文本/图片/文件按时间混排、左右对齐；120px 方形、图片 contain、文件名中间省略保留后缀
+  - [x] 气泡：完成后无进度/无「接收·已完成」文案；发送失败左侧重试；接收待确认右侧接受/取消
+  - [x] 菜单：PC 右键跟随鼠标（贴边翻转）、移动端长按居中；图片菜单仅「另存为」，文件菜单「打开文件+另存为」
+  - [x] 预览：点击图片 80vw/80vh contain 居中；移动端双指缩放 1–4 倍、关闭复位；全局禁止双指缩放
+  - [x] 滚动：新增内容置底；上滑时不打断并显示「以下为新消息」（收到的文件除外）；回到底部恢复；滚顶加载更早 100 条且视口不跳
+  - [x] 复制：气泡无复制按钮，右键/长按菜单复制并弹 1.5s「已复制」
+  - [x] 设置：下载目录「打开文件夹」（仅桌面）；清空全部历史二次确认，勾选后下载目录文件被清空
+  - [x] 安全区/键盘：顶部状态栏与底部手势条留白正常，键盘弹出时输入行被顶起
+
+> 迭代中新增的回归项（I6.6 文件打开语义、I6.7 预览滚轮/拖拽与失败态、I6.8 清空历史即时生效、I6.9 移动端定时清理）随同轮验收确认。
 
 
 ### I6.1 · 真机反馈三项修复（2026-11-13）
@@ -397,5 +399,53 @@ message({ type: "success" | "error" | "info", text: string, duration = 1500 }): 
 - **产物**（内嵌 `index-Ijln4N4T.js` / `index-DhEf0nzg.css`）：
   - APK：11.16 MB，SHA-256 `C72802E470266EF7A55F194E7C7A87344917F12274173BABDFFE4210801A9DF3`（`.so` 9.41 MB）。
   - exe：13.18 MB，SHA-256 `3ED6F24F09C9C7E6FF7CAA128B04580011F538F2AB8A3925CDE987B90B7DEEA4`。
+
+
+
+### I6.7 · 失败态交互 + 错误日志 + 通用提示条（2026-11-14）
+
+| # | 需求 | 实现 |
+|---|---|---|
+| 1 | 已拒绝/失败的文件、图片不可点击（发送方可点，移动端重启后点击无反应） | 根因：`onBoxClick` 只对 `state === "done"` 生效，失败项点击**完全没有反馈**。新增 `isClickable`：done → 双向可点；failed/rejected/cancelled → **只有发送方可点**（打开源文件，找不到时提示「源文件已被移动或删除」），接收方加 `.static` 去掉 hover 且不响应；进行中的图片仅在已有预览数据时可点 |
+| 2 | 失败任务重启后隐藏重试 | transfer store 新增 `sessionIds`（`upsert` 标记，历史 `ingestHistory` 不标记）+ getter `isSessionTask`；`TransferBubble` 新增 `hideRetry`（用反向语义规避 Vue 把缺省布尔 prop 判为 false 的坑），Chat 传 `!isSessionTask(id)` |
+| 3 | 清空会话记录二次确认 + message 提示 | `clearConversation()` 先 `confirmDialog`（危险样式），确认后清空并 `message.success("本会话记录已清空")`；失败走统一兜底并写入日志 |
+| 4 | 未知报错统一兜底 + 错误日志 + 设置页入口 | 新增 `src-tauri/src/errorlog.rs`：`<app_data>/logs/YYYY-MM-DD/errors.log`，启动时清理超过 7 天的日期目录（只处理可解析为日期的目录），`has_logs()` 判断目录内是否有非空日志；新增命令 `report_error` / `get_error_log` / `open_error_log_dir`（桌面打开文件夹，Android 返回明确错误、前端改为展示路径）；前端新增 `utils/errors.ts`（`friendlyError`：中文后端文案透传，其余统一「操作失败，请稍后重试」；`handleError` 上报原始信息并返回友好文案）与 `stores/errorLog.ts`；设置页在 `hasLogs` 时显示「查看错误日志」（桌面按钮打开文件夹 / Android 只读文本框显示目录），重启后按目录内容决定显隐 |
+| 5 | 对话区提示效果抽成通用组件，清空会话不再使用 | 新增 `components/NoticeBar.vue`（`text`/`testid`/`closable`，内置下滑动画与关闭按钮；`withDefaults` 保证 `closable` 默认 true），Chat 改用它渲染错误/传输/粘贴/文件夹提示；清空会话改用 confirm + message，不再占用该浮层 |
+
+- **词条**：新增 `error.unknown` / `error.logHint` / `error.logOpen` / `error.logOpenFailed`、`chat.clearHistoryConfirm`。
+- **门禁**：`npm run test` **221 passed（26 文件）**（新增 errors util 5 例、NoticeBar 4 例、失败态点击/hideRetry 2 例、`isSessionTask` 1 例、错误日志入口 3 例）；`cargo test` lib **97**（新增 errorlog 4 例：日期互逆、非法目录名、写日志、清理过期）+ 集成 22；`clippy -D warnings` 0、`fmt` 0、`vue-tsc` 0、`prettier` 通过。
+- **产物**（内嵌 `index-zwgRPt9I.js` / `index-j46guuss.css`）：
+  - APK：11.20 MB，SHA-256 `958A15970C906BD65CFE7D55BE36A7EDC74481E6FFF28FD590A8DB339A76BF92`。
+  - exe：13.28 MB，SHA-256 `D8556343C313811385780915A663896DB0C3DC3E77117BF98E327AF8BC128847`。
+
+
+
+### I6.8 · 清空历史即时生效 + Android 下载目录固定（2026-11-14）
+
+| # | 问题 | 实现 |
+|---|---|---|
+| 1 | 设置页「历史已清空」改为 message | `settings.clearAllHistory()` 成功后 `message.success(...)`（有删除文件时带数量），移除设置页 `settings-history-cleared` 常驻段落与 `notice = "historyCleared"` |
+| 2 | 移动端「同时删除已接收文件」不生效；下载目录统一固定 | 根因：Android 的配置下载目录是**相对路径** `downloads`，`delete_files_under()` 里的 `canonicalize(base)` 失败 → 一律不删。新增 `AppState.receive_dir`（Android = `<app_data>/download/chatter`，桌面 = 配置值），`clear_history` 以它为基准；`get_settings` 在 Android 回报实际目录；`save_settings` 在 Android 不再把接收目录改成客户端传值；`platform::paths::android_download_dir()` 抽出并加单测 |
+| 3 | 清空全部历史后回对话页仍有记录，需重启 | 根因：后端已清空，前端 `chat`/`transfers` store 仍缓存旧消息与任务。新增 `chat.resetAll()` / `transfers.resetAll()`（**保留事件订阅**，与测试用 `clear()` 区分），清空成功后同步调用 |
+
+- **门禁**：`npm run test` **221 passed（26 文件）**（改写 settings-store 清空历史用例：断言 message 文案 + 本地缓存清空；settings-view 两处改为断言 message）；`cargo test` lib **98**（新增 `android_download_dir_is_fixed`）+ 集成 22；`clippy -D warnings` 0（`AppState::new` 参数超限处加注释豁免）、`fmt` 0、`vue-tsc` 0、`prettier` 通过。
+- **产物**（内嵌 `index-CPHiYFp1.js` / `index-Cj0iekW1.css`）：
+  - APK：11.20 MB，SHA-256 `4F863FBFB4E10C7ED9FD5003A15F318229775869014049F9A273076151D347C5`。
+  - exe：13.28 MB，SHA-256 `A8CE8113DF3E523CADFE24483305374D745534312B4218668591CCD5F4F2097A`。
+
+
+
+### I6.9 · 移动端定时清理（2026-11-14）
+
+| # | 需求 | 实现 |
+|---|---|---|
+| 1 | 设置页新增「定时清理」：勾选框 + 天数输入（默认 7、纯数字、>0） | `AppConfig` 新增 `auto_clean_enabled`（**默认关闭**，旧配置由 serde 默认补齐）与 `auto_clean_days`（默认 7）；`SettingsDto`/前端 `Settings` 同步；设置页**仅 Android** 渲染该区块，未勾选时天数输入禁用；输入即时净化（小数向下取整、0/空回退 7、上限 3650），保存时前端 `normalizeCleanDays` + 后端 `validate_clean_days`（0 → 报错）双保险 |
+| 2 | 第二行提示语 | `settings.autoCleanHint`：「超过保留天数的接收文件会在每次打开应用时自动删除。请及时用「另存为」备份重要文件，否则这些文件会持续占用手机存储空间。」 |
+| 3 | 勾选后每次启动清理超期数据 | 新增 `src-tauri/src/autoclean.rs`：按文件 mtime 清理接收目录第一层文件 + `.chatters-partial/` 过期残留（目录本身保留）；`lib.rs` 启动时开关开启则异步清理，并用删除路径集合调用 `HistoryStore::remove_transfers()` 同步移除指向已删文件的接收记录，避免留下"点开必失败"的条目 |
+
+- **门禁**：`npm run test` **226 passed（26 文件）**（新增 settings-view 3 例：桌面隐藏、移动端渲染与保存、天数规范化；settings-store 2 例：保存规范化 + `normalizeCleanDays`）；`cargo test` lib **107**（autoclean 4、storage `remove_transfers` 2、config 旧配置默认值 1、`validate_clean_days` 2）+ 集成 22；`clippy -D warnings`/`fmt`/`vue-tsc`/`prettier` 全绿；`cargo check --target aarch64-linux-android` 通过。
+- **产物**（内嵌 `index-FZIPQD0X.js` / `index-iQM8bW87.css`）：
+  - APK：11.27 MB，SHA-256 `50AE935C05047FE73D28029D556E3B13B3D5E9E8FA549778ADB648782477ED60`。
+  - exe：13.31 MB，SHA-256 `38F83791817F422A7D84DC2BC4668BFE74DF36E581B949B4267117B8BB9B8CA8`。
 
 

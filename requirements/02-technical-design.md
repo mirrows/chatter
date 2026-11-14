@@ -226,11 +226,11 @@ src/
 |---|---|
 | `list_devices` / `add_device_by_ip(addr)` | 设备列表 / 手动按 IP 添加（M4 之后补齐，F3） |
 | `refresh_devices()` | 主动触发一次发现查询（v2/M9：切回前台或发送失败时刷新设备表） |
-| `send_text(peer_id, text)` / `resend(msg_id)` | 文字消息 / 重发（resend 见下） |
+| `send_text(peer_id, text)` / `resend(msg_id)` | 文字消息 / 重发（**`resend` 未实现**，前端复用 `send_text`；见 §8 说明） |
 | `send_file(peer_id, path)` | 图片或文件（后端按扩展名区分类型，返回任务快照） |
 | `accept_file(transfer_id)` / `reject_file(transfer_id)` | 接收确认（F34） |
 | `cancel_transfer(transfer_id)` / `retry_transfer(transfer_id)` | 终止 / 重试（重试为 M3-b 实现，按续传偏移继续） |
-| `open_transfer_file(transfer_id)` / `reveal_transfer_file(transfer_id)` / `save_transfer_as(transfer_id)` | 打开已接收文件 / 在资源管理器定位 / 另存为（P1，F23） |
+| `open_transfer_file(transfer_id)` / `reveal_transfer_file(transfer_id)` / `save_transfer_as(transfer_id)` | 打开文件 / 在资源管理器定位 / 另存为（P1，F23；v3：**发送方打开源文件、接收方打开落盘文件**） |
 | `list_transfers()` | 传输任务列表（界面重建时使用） |
 | `get_image_preview(transfer_id)` | 已接收图片的 data URL（F23 预览） |
 | `pick_file(images_only)` | 打开系统文件选择框，返回绝对路径（F20/F30） |
@@ -241,6 +241,9 @@ src/
 | `open_download_dir()` | 打开下载目录（v3）：桌面端用文件管理器打开，目录不存在时先创建；Android 返回错误（前端隐藏入口） |
 | `get_history_page(peer_id?, before_ts?, limit?)` | 分页读取历史（v3 向上无限滚动）：消息与传输按时间合并，默认 100 条/页、上限 500，返回 `{ items, hasMore }` |
 | `get_autostart` / `set_autostart(enabled)` | 开机自启查询/设置（M4，F50） |
+| `report_error(scope, message)` | 上报未知错误到本地日志（v3），返回 `{ dir, file, hasLogs }` |
+| `get_error_log()` | 读取错误日志位置与「目录内是否已有日志」（v3，设置页据此显隐入口） |
+| `open_error_log_dir()` | 打开错误日志目录（v3，桌面端；Android 返回错误，前端改为展示路径） |
 
 事件：`device://update`、`message://new`、`transfer://update`、`session://update`（会话连接状态）。
 
@@ -271,6 +274,18 @@ src/
   指定 `peer_id` 时保持原语义（只删该会话记录里的接收文件）。
 - 传输任务 DTO 增加 `ts`（创建时间 Unix 毫秒，v3）：前端把图片/文件与文字消息按时间混排，
   历史记录同样使用该时间戳而非推送时间。
+- 本地路径解析（v3，`transfer_local_path`）：接收方向取落盘路径；发送方向先取内存任务源路径，
+  再回退历史 `source_path`；两者都没有时返回 `file unavailable`，前端按方向给出
+  「源文件已被移动或删除」/「文件已被清理，如需重新获取请让对方重新发送」。
+- 平台打开文件（v3）：Windows 改用 `ShellExecuteW`（不再 `cmd /C start`，无控制台闪窗）；
+  macOS `open`、Linux `xdg-open`、Android 走 FileProvider + `ACTION_VIEW`。
+- 设置项（v3）：`downloadDir` 在移动端只读（应用私有目录 `<app_data>/download/chatter`，
+  点击给出 message 提示）；新增 `autoCleanEnabled` / `autoCleanDays`（默认 `false` / `7`，
+  天数必须 > 0，启动时按 mtime 清理超期接收文件并移除对应传输记录）。
+- 错误日志（v3）：`<app_data>/logs/YYYY-MM-DD/errors.log`，启动时清理超过 7 天的日期目录；
+  设置页仅在目录内存在非空日志时展示入口。
+- 未知错误兜底（v3）：`utils/errors.ts` 的 `friendlyError` 保留后端中文文案，其余统一
+  「操作失败，请稍后重试」；原始信息通过 `report_error` 写入本地日志。
 
 ## 9. 风险与对策
 

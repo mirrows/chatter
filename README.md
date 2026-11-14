@@ -1,7 +1,8 @@
 # Chatters — 局域网点对点传输工具（文字 / 图片 / 文件）
 
 > 无需服务器、免登录的局域网点对点传输工具，支持文字、图片与文件传输。
-> 技术栈：Tauri 2.x + Vue 3 + Rust 后端。当前版本：**1.0.0-rc.1**（M2–M4 + P0/P1/P2 收尾完成，Windows 免安装版可交付）。
+> 技术栈：Tauri 2.x + Vue 3 + Rust 后端。当前版本：**1.0.0-rc.1**
+> （桌面 Windows + 移动 Android arm64 均已出包并通过真机验收；v3 UI 重构完成，后续项见 `requirements/17-v3-followups.md`）。
 
 ## 目录结构
 
@@ -20,6 +21,9 @@
   - `12-milestone-p1-p2-report.md` — P1/P2 报告（文件操作、历史清理、托盘、发布工程）
   - `13-v2-plan.md` — v2 迭代计划（多平台 / 网络与性能 / 完整块级续传）
   - `14-milestone-m6-m10-report.md` — M6 + M10 实施报告（平台层、自动重连、设备指纹、2MB 块）
+  - `15-m9-spike-plan.md` — Android（M9）实施与真机验收记录、APK 产物哈希
+  - `16-v3-plan.md` — v3 UI 重构计划与进度（I0–I6.9、真机验收、产物哈希）
+  - `17-v3-followups.md` — **后续迭代与优化项（唯一待办入口）**
 - `src-tauri/src/` — Rust 后端：`config` / `discovery` / `platform` / `protocol` / `session` / `transfer` / `commands`
 - `src/` — Vue 3 前端：`views`（设备列表、会话）、`components`、`stores`、`api`、`i18n`
 - `tests/` — 前端统一测试目录（布局见 rules.md R2.2）
@@ -41,18 +45,28 @@
   v2 第一批（M6 代码部分 + M10）：`platform` 平台能力层与按平台打包配置、三平台 CI 矩阵、
   断线自动重连（5/15/30s，事件与界面状态）、设备指纹（`A3F2-91C0`）、`chunk2m` 协商的 2MB 块（loopback 36.6 → 61.6/66.5 MiB/s）；
   v2 Android spike（M9）：工程门控（桌面插件 `cfg` 隔离 + `mobile_entry_point`）、`gen/android` 工程、
-  模拟器 API 36 上构建/安装/启动并用手动 IP 打通文字双向收发（详见 `requirements/15-m9-spike-plan.md`）
-- 下一步：v1 实机验收（`requirements/11-acceptance-checklist.md`）与联网打包/签名；
-  v2 剩余：M11 完整块级续传 → M7/M8 实机构建 → M9 原生能力（MulticastLock / 前台服务 / SAF）+ 真机验收
+  模拟器 API 36 上构建/安装/启动并用手动 IP 打通文字双向收发（详见 `requirements/15-m9-spike-plan.md`）；
+  v3 UI 重构（I0–I6.9）：时间线混排 + 120px 气泡、右键/长按菜单、图片预览（PC 滚轮缩放 + 拖拽、移动端双指/单指）、
+  移动端卡片与安全区适配、无限滚动与新消息分割线、通用浮层（菜单/预览/确认/输入/提示条）、
+  文件打开语义（发送方打开源文件、找不到按方向提示）、错误日志（按天归档 7 天 + 设置页入口）、
+  移动端定时清理、清空历史即时生效
+- 下一步：见 `requirements/17-v3-followups.md`
+  （P1：正式签名 + 双 ABI、NSIS/签名、设备上下线提示改 message、M11 块级续传；
+  P2：macOS/Linux 打包、CI Android、E2E、大图 asset 协议）
 
 ## 数据与文件位置
 
-| 内容 | 位置 |
-|---|---|
-| 配置（昵称/端口/下载目录/主题/自动接收） | `%APPDATA%\com.chatters.app\config.json` |
-| 历史（消息 + 传输记录） | `%APPDATA%\com.chatters.app\history.json` |
-| 接收文件 | `%USERPROFILE%\Downloads\Chatters`（可在设置页修改） |
-| 续传临时文件 | `<下载目录>\.chatters-partial\` |
+| 内容                                              | 位置                                                                                                                      |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| 配置（昵称/端口/下载目录/主题/自动接收/定时清理） | `%APPDATA%\com.chatters.app\config.json`（Android：`<app_data>/config.json`）                                             |
+| 历史（消息 + 传输记录）                           | `%APPDATA%\com.chatters.app\history.json`（Android 同上目录）                                                             |
+| 接收文件（桌面）                                  | `%USERPROFILE%\Downloads\Chatters`（可在设置页修改）                                                                      |
+| 接收文件（Android）                               | `<app_data>/download/chatter`（**应用私有目录**，文件管理器不可见；用「另存为」导出到公共目录）                           |
+| 续传临时文件                                      | `<接收目录>\.chatters-partial\`                                                                                           |
+| 错误日志（v3）                                    | `<app_data>/logs/YYYY-MM-DD/errors.log`，只保留最近 7 天；设置页在目录有日志时显示入口（桌面打开文件夹 / 移动端显示路径） |
+
+> 移动端可在「设置 → 定时清理」按天自动清理超期接收文件（默认关闭，保留天数默认 7 天、可改）。
+> 清理会删除文件**及其对应的图片/文件气泡记录**（文字记录不受影响）；重要文件请先用「另存为」备份。
 
 ## 打包
 
@@ -88,7 +102,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\build-android-arm64.ps1
 powershell -ExecutionPolicy Bypass -File .\tools\build-android-arm64.ps1 -SkipFrontendBuild -SkipRustBuild
 ```
 
-产物：`src-tauri/target/android/Chatters-1.0.0-rc.1-arm64-debugsigned.apk`（约 10.9 MB，含 `lib/arm64-v8a/libchatters_lib.so`）。
+产物：`src-tauri/target/android/Chatters-1.0.0-rc.1-arm64-debugsigned.apk`（约 11.3 MB，含 `lib/arm64-v8a/libchatters_lib.so`）。
 
 ```powershell
 # 真机安装（首次需在系统设置里允许「未知来源」/「安装未知应用」）
@@ -122,6 +136,7 @@ npm run tauri dev          # 启动桌面应用
 ```powershell
 # 前端门禁
 npm run test               # Vitest（tests/**/*.spec.ts）
+npm run lint               # ESLint 9（eslint.config.js，含 .vue）
 npx vue-tsc --noEmit
 npx prettier --check "src/**/*.{ts,vue}" "tests/**/*.ts"
 

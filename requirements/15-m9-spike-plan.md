@@ -206,14 +206,14 @@ cd src-tauri; npx tauri android dev      # 或 npx tauri android run --target x8
 4. 通知权限若被用户拒绝，传输完成提醒不会出现（不影响传输本身）；
 5. Android 端仍无「打开所在文件夹」，UI 按钮保留但会给出提示，后续可考虑按平台隐藏。
 
-### 8.4 真机验收清单（待设备）
+### 8.4 真机验收清单（2026-11-14 结果）
 
-- [ ] 同一 Wi-Fi 下 15 s 内自动发现 PC（组播锁生效）
-- [ ] AP 隔离网络下用手动 IP 仍可建连（兜底路径）
-- [ ] 传输中切后台 / 锁屏 10 分钟不中断，通知栏可见常驻通知
-- [ ] 1 GB 文件接收 → SAF 导出到用户目录，重名不覆盖
-- [ ] 拒绝通知权限时传输仍正常，仅无提醒
-- [ ] Android 11 / 13 / 14 各一台（OEM 后台策略差异）
+- [x] 同一 Wi-Fi 下 15 s 内自动发现 PC（组播锁生效）
+- [x] AP 隔离网络下用手动 IP 仍可建连（兜底路径）
+- [x] 传输中切后台 / 锁屏 10 分钟不中断，通知栏可见常驻通知
+- [x] 1 GB 文件接收 → SAF 导出到用户目录，重名不覆盖
+- [ ] 拒绝通知权限时传输仍正常，仅无提醒 —— 未单独复测，列入 `17-v3-followups.md`
+- [ ] Android 11 / 13 / 14 各一台（OEM 后台策略差异） —— 仅在现有真机上验证，多版本矩阵列入 `17-v3-followups.md`
 
 ## 9. 可安装 APK 产出（arm64 + debug keystore，2026-11-02）
 
@@ -248,7 +248,7 @@ D:\tools\gradle\gradle-9.6.1\bin\gradle.bat assembleArm64Release -x rustBuildArm
 |---|---|
 | 签名包 | `src-tauri/target/android/Chatters-1.0.0-rc.1-arm64-debugsigned.apk` |
 | 大小 | 11.13 MB（中间件 aligned 11.07 MB） |
-| SHA-256 | `C72802E470266EF7A55F194E7C7A87344917F12274173BABDFFE4210801A9DF3`（2026-11-14 v3/I6.6 重出包） |
+| SHA-256 | `50AE935C05047FE73D28029D556E3B13B3D5E9E8FA549778ADB648782477ED60`（2026-11-14 v3/I6.9 重出包） |
 | 原生库 | `lib/arm64-v8a/libchatters_lib.so`（9.38 MB，含当前前端资源） |
 | 包名 / 版本 | `com.chatters.app` / versionCode `1000000`，versionName `1.0.0-rc.1` |
 | SDK | minSdk `24`、targetSdk `36`、compileSdk `36` |
@@ -280,11 +280,12 @@ $bt="$env:ANDROID_HOME\build-tools\36.0.0"
 6. **APK 不入库**：`gen/android/.gitignore` 忽略 `build` 与 `jniLibs`，根 `.gitignore` 忽略 `target/`；
    新克隆仓库无 APK，需按 §9.1 重建。
 
-### 9.4 后续（待真机）
+### 9.4 后续（真机验收结果，2026-11-14）
 
-- [ ] `adb install -r` 安装并启动，确认不白屏、可手动 IP 建连
-- [ ] 接 §8.4 真机清单（广播发现 / 锁屏保活 10 min / 1 GB SAF 导出）
+- [x] `adb install -r` 安装并启动，确认不白屏、可手动 IP 建连
+- [x] 接 §8.4 真机清单（广播发现 / 锁屏保活 10 min / 1 GB SAF 导出）
 - [ ] 正式签名：真实 keystore + `signingConfigs`，同时产出 armv7/arm64 双 ABI 或 AAB
+  —— **未做，转入后续迭代**（见 `17-v3-followups.md` 第 1 节）
 
 
 ## 10. 真机验收问题与修复（2026-11-02）
