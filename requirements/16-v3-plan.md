@@ -461,5 +461,8 @@ message({ type: "success" | "error" | "info", text: string, duration = 1500 }): 
 | 5 | 设备上下线提示改 `message`（R8.1） | `devices.applyUpdate` 直接 `message.success/info`；删除 `notice` 状态、`clearNotice`、设备页内联提示与 3 秒计时器（文案仍走 i18n，保留「已上线/已下线」） |
 
 - **门禁**：`npm run test` 226、`npm run lint` 0、`vue-tsc` 0、`prettier --check .` 全绿；`cargo test` lib **107** + 集成 **22**、`clippy -D warnings` 0、`fmt` 0。
-- **提交**：`4cc80be`（后端）、`dcc859b`（前端）、`a1579fc`（lint）、`f5d53fe`（格式）、`553ae60`（文档），已推送 `origin/main`。
+- **提交**：`4cc80be`（后端）、`dcc859b`（前端）、`a1579fc`（lint）、`f5d53fe`（格式）、`553ae60`（文档）、`e4faad6`（I6.10 记录）、`d255ba0`（设备提示改 message），已推送 `origin/main`。
+- **产物（最终包，内嵌 `index-Dh8BPHY7.js` / `index-Cq4M2HbF.css`）**：
+  - APK：11.27 MB，SHA-256 `C72C07A6E8D3085B9894CCA93AFDD44169025356ABB36520E1824A61A6E88E05`。
+  - exe：13.31 MB，SHA-256 `4B550AB2E8AD15B1E298C72838A14F6FFDE8836DA1EAE4F0C40CC9ACE8D4BA0A`。
 
