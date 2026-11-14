@@ -8,7 +8,7 @@
 
 use crate::config::AppConfig;
 use crate::discovery::{DeviceEntry, DiscoveryEvent, DiscoveryHandle};
-#[cfg(not(target_os = "android"))]
+use crate::errorlog::ErrorLog;
 use crate::platform::shell::{open_path, reveal_command};
 use crate::session::{SendStatus, SessionHub};
 use crate::storage::{now_millis, History, HistoryStore, StoredMessage, StoredTransfer};
@@ -320,10 +320,16 @@ pub struct AppState {
     pub history: HistoryStore,
     /// 发现服务句柄：发送失败/切回前台时可主动触发重新发现。
     pub discovery: DiscoveryHandle,
+    /// 错误日志（v3）：按天归档，设置页据此展示入口。
+    pub error_log: Arc<ErrorLog>,
+    /// 实际接收目录（Android 固定为 `<app_data>/download/chatter`，v3 清空历史时用它兜底）。
+    pub receive_dir: PathBuf,
 }
 
 impl AppState {
     /// 以配置、会话、传输中心与历史存储创建状态，设备列表初始为空。
+    // 仅在 lib.rs 启动处调用一次，参数即各子系统句柄，拆结构体反而降低可读性。
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: AppConfig,
         config_path: PathBuf,
@@ -331,6 +337,8 @@ impl AppState {
         transfers: TransferManager,
         history: HistoryStore,
         discovery: DiscoveryHandle,
+        error_log: Arc<ErrorLog>,
+        receive_dir: PathBuf,
     ) -> Self {
         Self {
             config: Arc::new(RwLock::new(config)),
@@ -340,6 +348,8 @@ impl AppState {
             transfers,
             history,
             discovery,
+            error_log,
+            receive_dir,
         }
     }
 }
@@ -411,6 +421,17 @@ pub struct SettingsDto {
     pub auto_accept_images: bool,
     /// 自动接收普通文件。
     pub auto_accept_files: bool,
+    /// 是否开启定时清理（v3，移动端）。
+    #[serde(default)]
+    pub auto_clean_enabled: bool,
+    /// 定时清理保留天数（v3，必须大于 0；缺省按 7 天，兼容旧客户端）。
+    #[serde(default = "default_clean_days")]
+    pub auto_clean_days: u32,
+}
+
+/// serde 默认值：定时清理保留天数。
+fn default_clean_days() -> u32 {
+    crate::config::DEFAULT_CLEAN_DAYS
 }
 
 /// 设置保存结果。
@@ -425,16 +446,31 @@ pub struct SaveSettingsResult {
 #[tauri::command]
 pub async fn get_settings(state: tauri::State<'_, AppState>) -> Result<SettingsDto, String> {
     let config = state.config.read().await;
+    // 移动端下载目录固定为应用私有目录：这里直接回报实际接收目录，避免界面显示相对路径（v3）。
+    #[cfg(target_os = "android")]
+    let download_dir = state.receive_dir.to_string_lossy().to_string();
+    #[cfg(not(target_os = "android"))]
+    let download_dir = config.download_dir.clone();
     Ok(SettingsDto {
         device_id: config.device_id.clone(),
         nickname: config.nickname.clone(),
         discovery_port: config.discovery_port,
         tcp_port: config.tcp_port,
-        download_dir: config.download_dir.clone(),
+        download_dir,
         theme: config.theme.clone(),
         auto_accept_images: config.auto_accept_images,
         auto_accept_files: config.auto_accept_files,
+        auto_clean_enabled: config.auto_clean_enabled,
+        auto_clean_days: config.auto_clean_days,
     })
+}
+
+/// 校验定时清理天数（v3）：必须是大于 0 的整数（前端已限制为纯数字）。
+fn validate_clean_days(days: u32) -> Result<(), String> {
+    if days == 0 {
+        return Err("清理天数必须大于 0".to_string());
+    }
+    Ok(())
 }
 
 /// 保存设置（F52）：下载目录与自动接收即时生效，昵称/端口需重启。
@@ -453,6 +489,7 @@ pub async fn save_settings(
     if settings.download_dir.trim().is_empty() {
         return Err("下载目录不能为空".to_string());
     }
+    validate_clean_days(settings.auto_clean_days)?;
     let theme = if settings.theme == "dark" {
         "dark"
     } else {
@@ -472,14 +509,21 @@ pub async fn save_settings(
         config.theme = theme.to_string();
         config.auto_accept_images = settings.auto_accept_images;
         config.auto_accept_files = settings.auto_accept_files;
+        config.auto_clean_enabled = settings.auto_clean_enabled;
+        config.auto_clean_days = settings.auto_clean_days;
         (restart_required, config.clone())
     };
 
     crate::config::save(&state.config_path, &saved).map_err(|e| e.to_string())?;
+    // 桌面端跟随用户设置；Android 固定为实际接收目录（v3：避免切到相对路径后清空历史失效）。
+    #[cfg(target_os = "android")]
+    let receive_dir = state.receive_dir.clone();
+    #[cfg(not(target_os = "android"))]
+    let receive_dir = PathBuf::from(&saved.download_dir);
     state
         .transfers
         .update_settings(
-            PathBuf::from(&saved.download_dir),
+            receive_dir,
             saved.auto_accept_images,
             saved.auto_accept_files,
         )
@@ -631,10 +675,8 @@ pub async fn clear_history(
     let peer = peer_id.as_deref();
     let mut removed = 0usize;
     if delete_files.unwrap_or(false) {
-        let base = {
-            let config = state.config.read().await;
-            PathBuf::from(&config.download_dir)
-        };
+        // 用「实际接收目录」而不是配置值：Android 的配置里是相对路径，canonicalize 会失败（v3 真机问题）。
+        let base = state.receive_dir.clone();
         let records = state.history.transfers_for(peer).await;
         let paths: Vec<String> = records
             .into_iter()
@@ -706,6 +748,61 @@ pub async fn open_download_dir(state: tauri::State<'_, AppState>) -> Result<(), 
             .map_err(|e| e.to_string())?
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+}
+
+/// 错误日志位置信息（v3）。
+#[derive(Serialize)]
+pub struct ErrorLogInfo {
+    /// 日志根目录（按天建子目录）。
+    pub dir: String,
+    /// 今天的日志文件路径。
+    pub file: String,
+    /// 目录里是否已有日志（决定设置页是否展示入口）。
+    pub has_logs: bool,
+}
+
+/// 组装日志信息。
+fn error_log_info(state: &AppState) -> ErrorLogInfo {
+    ErrorLogInfo {
+        dir: state.error_log.root().to_string_lossy().to_string(),
+        file: state.error_log.today_file().to_string_lossy().to_string(),
+        has_logs: state.error_log.has_logs(),
+    }
+}
+
+/// 上报一条错误并写入本地日志（前端统一兜底提示后调用）。
+#[tauri::command]
+pub async fn report_error(
+    state: tauri::State<'_, AppState>,
+    scope: String,
+    message: String,
+) -> Result<ErrorLogInfo, String> {
+    state.error_log.record(&scope, &message)?;
+    Ok(error_log_info(&state))
+}
+
+/// 读取错误日志位置与「是否已有日志」（设置页展示用）。
+#[tauri::command]
+pub async fn get_error_log(state: tauri::State<'_, AppState>) -> Result<ErrorLogInfo, String> {
+    Ok(error_log_info(&state))
+}
+
+/// 打开错误日志目录（桌面端）；Android 没有文件管理器入口，返回明确错误。
+#[tauri::command]
+pub async fn open_error_log_dir(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = &state;
+        Err("Android 无法打开文件夹，请查看日志目录路径".to_string())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let dir = state.error_log.root().to_path_buf();
+        tauri::async_runtime::spawn_blocking(move || open_path(&dir))
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| format!("无法打开错误日志目录：{e}"))
     }
 }
 
@@ -1517,6 +1614,23 @@ mod tests {
         assert_eq!(pick_local_path(None, None, None, None), None);
         let pending = stored("receive", None, None);
         assert_eq!(pick_local_path(None, None, None, Some(&pending)), None);
+    }
+
+    /// 正常路径：定时清理天数必须大于 0（v3）。
+    #[test]
+    fn validate_clean_days_accepts_positive() {
+        assert!(validate_clean_days(1).is_ok());
+        assert!(validate_clean_days(7).is_ok());
+        assert!(validate_clean_days(365).is_ok());
+    }
+
+    /// 异常：天数为 0 时拒绝保存并给出中文提示。
+    #[test]
+    fn validate_clean_days_rejects_zero() {
+        assert_eq!(
+            validate_clean_days(0),
+            Err("清理天数必须大于 0".to_string())
+        );
     }
 
     fn dto(id: &str, name: &str) -> DeviceDto {

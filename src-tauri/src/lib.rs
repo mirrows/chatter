@@ -7,9 +7,11 @@
 //!
 //! 后续里程碑按 rules.md 逐个功能叠加。
 
+pub mod autoclean;
 pub mod commands;
 pub mod config;
 pub mod discovery;
+pub mod errorlog;
 pub mod platform;
 pub mod protocol;
 pub mod session;
@@ -163,14 +165,16 @@ pub fn run() -> Result<(), tauri::Error> {
                 )))?;
 
             // 传输中心：接收目录取配置里的下载目录，图片自动接收（F34）。
-            // Android 无用户下载目录（M9 spike）：先落应用私有目录，完成后再由 SAF 导出。
+            // Android 无用户可见下载目录（scoped storage）：统一固定为
+            // `<app_data>/download/chatter`，不再使用相对路径，避免清空历史时定位不到文件。
             #[cfg(target_os = "android")]
-            let receive_dir = app.path().app_data_dir()?.join("downloads");
+            let receive_dir =
+                crate::platform::paths::android_download_dir(&app.path().app_data_dir()?);
             #[cfg(not(target_os = "android"))]
             let receive_dir = PathBuf::from(cfg.download_dir.clone());
             let (transfer_tx, mut transfer_rx) = tokio::sync::mpsc::channel::<TransferEvent>(64);
             let transfers = TransferManager::new(
-                TransferConfig::new(receive_dir, true),
+                TransferConfig::new(receive_dir.clone(), true),
                 hub.clone(),
                 transfer_tx,
             );
@@ -189,6 +193,10 @@ pub fn run() -> Result<(), tauri::Error> {
             // 便于发送失败/切回前台时主动触发重新发现（v2/M9 真机问题）。
             let discovery = discovery::DiscoveryHandle::default();
 
+            // 错误日志（v3）：按天归档，启动时清理超过 7 天的目录。
+            let error_log = std::sync::Arc::new(errorlog::ErrorLog::open(
+                app.path().app_data_dir()?.join("logs"),
+            ));
             let state = AppState::new(
                 cfg.clone(),
                 config_path.clone(),
@@ -196,9 +204,43 @@ pub fn run() -> Result<(), tauri::Error> {
                 transfers,
                 history.clone(),
                 discovery.clone(),
+                error_log,
+                receive_dir.clone(),
             );
             let devices = state.devices.clone();
             app.manage(state);
+
+            // 定时清理（v3）：开启后每次启动删除超过保留天数的接收文件，
+            // 并同步移除指向这些文件的历史记录，避免出现"点开必失败"的条目。
+            if cfg.auto_clean_enabled {
+                let clean_dir = receive_dir.clone();
+                let clean_days = cfg.auto_clean_days;
+                let clean_history = history.clone();
+                tauri::async_runtime::spawn(async move {
+                    let report = autoclean::clean(&clean_dir, clean_days).await;
+                    if report.files == 0 {
+                        return;
+                    }
+                    let removed = report.removed.clone();
+                    let dropped = clean_history
+                        .remove_transfers(|item| {
+                            item.direction == "receive"
+                                && item
+                                    .path
+                                    .as_ref()
+                                    .map(|path| removed.contains(&std::path::PathBuf::from(path)))
+                                    .unwrap_or(false)
+                        })
+                        .await
+                        .unwrap_or(0);
+                    log::info!(
+                        "auto clean: {} files, {} bytes, {} history records",
+                        report.files,
+                        report.bytes,
+                        dropped
+                    );
+                });
+            }
 
             // 托盘（F51）：显示主窗口 / 退出；双击图标亦显示窗口。
             // Android 无托盘（M9 改为纯通知），因此整块仅在桌面端编译。
@@ -448,6 +490,9 @@ pub fn run() -> Result<(), tauri::Error> {
             commands::clear_history,
             commands::open_download_dir,
             commands::pick_download_dir,
+            commands::report_error,
+            commands::get_error_log,
+            commands::open_error_log_dir,
             commands::get_autostart,
             commands::set_autostart,
             commands::add_device_by_ip,

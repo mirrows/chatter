@@ -178,6 +178,23 @@ impl HistoryStore {
         self.persist().await
     }
 
+    /// 删除满足条件的传输记录并落盘；返回删除条数（v3 定时清理用）。
+    pub async fn remove_transfers<F>(&self, predicate: F) -> Result<usize, std::io::Error>
+    where
+        F: Fn(&StoredTransfer) -> bool,
+    {
+        let removed = {
+            let mut history = self.inner.lock().await;
+            let before = history.transfers.len();
+            history.transfers.retain(|item| !predicate(item));
+            before - history.transfers.len()
+        };
+        if removed > 0 {
+            self.persist().await?;
+        }
+        Ok(removed)
+    }
+
     /// 清空历史；`peer_id` 为 None 时清空全部（F40/F41）。
     pub async fn clear(&self, peer_id: Option<&str>) -> Result<(), std::io::Error> {
         {
@@ -390,6 +407,54 @@ mod tests {
         assert_eq!(found.transfer_id, "t-2");
         assert_eq!(found.state, "done");
         assert!(store.find_transfer("missing").await.is_none());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 正常路径：按条件删除传输记录并落盘（v3 定时清理联动）。
+    #[tokio::test]
+    async fn remove_transfers_by_predicate_persists() {
+        let dir = std::env::temp_dir().join("chatters_history_remove_transfers");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("history.json");
+        std::fs::remove_file(&path).ok();
+
+        let store = HistoryStore::open(path.clone()).await;
+        add_transfer(&store, "t-1", "peer-1").await;
+        add_transfer(&store, "t-2", "peer-1").await;
+
+        let removed = store
+            .remove_transfers(|item| item.transfer_id == "t-1")
+            .await
+            .expect("remove");
+        assert_eq!(removed, 1);
+        assert!(store.find_transfer("t-1").await.is_none());
+        assert!(store.find_transfer("t-2").await.is_some());
+
+        // 重新打开应从磁盘读到删除后的结果
+        let reopened = HistoryStore::open(path).await;
+        assert!(reopened.find_transfer("t-1").await.is_none());
+        assert!(reopened.find_transfer("t-2").await.is_some());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 边界：没有记录命中时不写盘、返回 0。
+    #[tokio::test]
+    async fn remove_transfers_returns_zero_when_none_match() {
+        let dir = std::env::temp_dir().join("chatters_history_remove_none");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("history.json");
+        std::fs::remove_file(&path).ok();
+
+        let store = HistoryStore::open(path).await;
+        add_transfer(&store, "t-1", "peer-1").await;
+        let removed = store
+            .remove_transfers(|item| item.transfer_id == "missing")
+            .await
+            .expect("remove");
+        assert_eq!(removed, 0);
+        assert!(store.find_transfer("t-1").await.is_some());
 
         std::fs::remove_dir_all(&dir).ok();
     }

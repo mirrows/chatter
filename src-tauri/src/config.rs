@@ -11,6 +11,8 @@ use std::path::Path;
 pub const DEFAULT_DISCOVERY_PORT: u16 = 28100;
 /// 默认 TCP 通信端口。
 pub const DEFAULT_TCP_PORT: u16 = 28101;
+/// 定时清理默认保留天数（v3）。
+pub const DEFAULT_CLEAN_DAYS: u32 = 7;
 
 /// 应用配置。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -33,11 +35,22 @@ pub struct AppConfig {
     /// 是否自动接收普通文件（F34/F52，默认关闭，需用户确认）。
     #[serde(default)]
     pub auto_accept_files: bool,
+    /// 是否开启定时清理（v3，默认关闭；开启后每次启动清理过期接收文件）。
+    #[serde(default)]
+    pub auto_clean_enabled: bool,
+    /// 定时清理保留天数（v3，默认 7，必须大于 0）。
+    #[serde(default = "default_clean_days")]
+    pub auto_clean_days: u32,
 }
 
 /// serde 默认值：true（用于旧配置缺字段时保持图片自动接收）。
 fn default_true() -> bool {
     true
+}
+
+/// serde 默认值：7 天（用于旧配置缺字段时保持默认保留期）。
+fn default_clean_days() -> u32 {
+    DEFAULT_CLEAN_DAYS
 }
 
 impl Default for AppConfig {
@@ -51,6 +64,8 @@ impl Default for AppConfig {
             theme: "light".to_string(),
             auto_accept_images: true,
             auto_accept_files: false,
+            auto_clean_enabled: false,
+            auto_clean_days: DEFAULT_CLEAN_DAYS,
         }
     }
 }
@@ -169,5 +184,33 @@ mod tests {
     fn default_nickname_format() {
         let n = default_nickname();
         assert!(n.starts_with("PC-") && n.len() == 7);
+    }
+
+    /// 边界：旧配置文件没有定时清理字段时使用默认值（关闭 / 7 天）。
+    #[test]
+    fn load_old_config_fills_clean_defaults() {
+        let dir = std::env::temp_dir().join("chatters_cfg_test_clean");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "device_id": "self-1",
+                "nickname": "PC-old",
+                "discovery_port": 28100,
+                "tcp_port": 28101,
+                "download_dir": "C:/Downloads/Chatters",
+                "theme": "dark",
+                "auto_accept_images": true,
+                "auto_accept_files": false
+            }"#,
+        )
+        .unwrap();
+
+        let cfg = load(&path).unwrap();
+        assert!(!cfg.auto_clean_enabled, "旧配置应默认关闭定时清理");
+        assert_eq!(cfg.auto_clean_days, DEFAULT_CLEAN_DAYS);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
