@@ -11,7 +11,9 @@
 use chatters_lib::protocol::{
     encode_chunk, read_frame, write_frame, FileDone, FileKind, FileOffer, Frame, FrameType, Hello,
 };
-use chatters_lib::session::{start_session, SessionConfig, SessionEvent, SessionHub};
+use chatters_lib::session::{
+    start_session, SessionConfig, SessionEvent, SessionHub, LOCAL_FEATURES,
+};
 use chatters_lib::transfer::{
     TransferConfig, TransferError, TransferEvent, TransferInfo, TransferKind, TransferManager,
     TransferState,
@@ -57,15 +59,26 @@ async fn spawn_node_with_timeout(
     dir: PathBuf,
     idle_timeout: Duration,
 ) -> (TransferManager, SessionHub, u16) {
+    spawn_node_full(device_id, name, dir, idle_timeout, local_features()).await
+}
+
+/// 本机默认能力声明（与生产一致）。
+fn local_features() -> Vec<String> {
+    LOCAL_FEATURES.iter().map(|f| f.to_string()).collect()
+}
+
+/// 完整版本：可自定义能力声明（用于模拟旧端做兼容回归）。
+async fn spawn_node_full(
+    device_id: &str,
+    name: &str,
+    dir: PathBuf,
+    idle_timeout: Duration,
+    features: Vec<String>,
+) -> (TransferManager, SessionHub, u16) {
     let port = free_tcp_port().await;
-    let (hub, mut events, _task) = start_session(SessionConfig::new(
-        device_id,
-        name,
-        port,
-        Duration::from_secs(1),
-    ))
-    .await
-    .expect("start session");
+    let mut session_config = SessionConfig::new(device_id, name, port, Duration::from_secs(1));
+    session_config.features = features;
+    let (hub, mut events, _task) = start_session(session_config).await.expect("start session");
 
     let (tx, mut rx) = mpsc::channel::<TransferEvent>(128);
     let mut config = TransferConfig::new(dir, true);
@@ -340,7 +353,105 @@ async fn hash_mismatch_marks_failed() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// 边界：待确认阶段取消，双方都进入 Cancelled，且不留临时文件（F33）。
+/// 正常路径：多块文件走 chunkmap（块表 + 位图 + 随机写），接收端校验通过（M11）。
+#[tokio::test]
+async fn chunkmap_transfers_multi_block_file() {
+    let root = temp_root("chunkmap");
+    let dir_a = root.join("a");
+    let dir_b = root.join("b");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
+
+    let (manager_a, _hub_a, port_a) = spawn_node("device-a", "PC-a", dir_a.clone()).await;
+    let (manager_b, hub_b, _port_b) = spawn_node("device-b", "PC-b", dir_b.clone()).await;
+    hub_b.connect(loopback(port_a)).await.expect("connect a");
+
+    // 2.5MB：默认 1MB 块 → 3 块；若协商 2MB 块 → 2 块（两种都应正确）。
+    let payload: Vec<u8> = (0..(2 * 1024 * 1024 + 512 * 1024))
+        .map(|index| (index % 251) as u8)
+        .collect();
+    let source = dir_b.join("multi.bin");
+    std::fs::write(&source, &payload).unwrap();
+
+    let info = manager_b
+        .send_file("device-a", &source)
+        .await
+        .expect("send file");
+    // 普通文件默认等待确认。
+    wait_state(&manager_a, &info.transfer_id, TransferState::Pending).await;
+    manager_a
+        .accept(&info.transfer_id)
+        .await
+        .expect("accept file");
+
+    let done = wait_state(&manager_a, &info.transfer_id, TransferState::Done).await;
+    let received = PathBuf::from(done.path.expect("received path"));
+    assert_eq!(std::fs::read(&received).unwrap(), payload);
+
+    // 成功后不留下 `.part` / `.bitmap` 残留。
+    assert!(part_files(&dir_a).is_empty(), "part must be renamed");
+    let leftovers: Vec<PathBuf> = std::fs::read_dir(&dir_a)
+        .expect("read dir")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("bitmap"))
+        .collect();
+    assert!(leftovers.is_empty(), "bitmap must be cleaned after success");
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// 兼容：双方都不声明 chunkmap 时回退到顺序写/偏移续传，传输仍然成功（M11 降级）。
+#[tokio::test]
+async fn legacy_peer_falls_back_without_chunkmap() {
+    let root = temp_root("legacy");
+    let dir_a = root.join("a");
+    let dir_b = root.join("b");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
+
+    let (manager_a, _hub_a, port_a) = spawn_node_full(
+        "device-a",
+        "PC-a",
+        dir_a.clone(),
+        Duration::from_secs(30),
+        Vec::new(),
+    )
+    .await;
+    let (manager_b, hub_b, _port_b) = spawn_node_full(
+        "device-b",
+        "PC-b",
+        dir_b.clone(),
+        Duration::from_secs(30),
+        Vec::new(),
+    )
+    .await;
+    hub_b.connect(loopback(port_a)).await.expect("connect a");
+
+    // 1.5MB（1MB 块 → 2 块），走旧偏移续传路径。
+    let payload: Vec<u8> = (0..(1024 * 1024 + 512 * 1024))
+        .map(|index| (index % 97) as u8)
+        .collect();
+    let source = dir_b.join("legacy.bin");
+    std::fs::write(&source, &payload).unwrap();
+
+    let info = manager_b
+        .send_file("device-a", &source)
+        .await
+        .expect("send file");
+    wait_state(&manager_a, &info.transfer_id, TransferState::Pending).await;
+    manager_a
+        .accept(&info.transfer_id)
+        .await
+        .expect("accept file");
+
+    let done = wait_state(&manager_a, &info.transfer_id, TransferState::Done).await;
+    assert_eq!(std::fs::read(done.path.expect("path")).unwrap(), payload);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// 正常路径：待确认阶段取消，双方都进入 Cancelled，且不留临时文件（F33）。
 #[tokio::test]
 async fn cancel_before_accept_cancels_both_sides() {
     let root = temp_root("cancel");

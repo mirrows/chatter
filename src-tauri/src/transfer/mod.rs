@@ -11,10 +11,11 @@ pub mod receiver;
 pub mod sender;
 
 use crate::protocol::{
-    decode_chunk, FileAccept, FileCancel, FileDone, FileKind, FileOffer, FileReject, FileResult,
-    Frame, FrameType, ProtocolError,
+    decode_chunk, FileAccept, FileBlockMap, FileCancel, FileDone, FileHave, FileKind, FileOffer,
+    FileReject, FileResult, Frame, FrameType, ProtocolError,
 };
 use crate::session::{SessionError, SessionHub};
+use chunkmap::{BlockBitmap, ChunkMap};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -302,6 +303,20 @@ pub(crate) struct Task {
     pub(crate) resume_from: u64,
     /// 接收端部分文件元数据路径（简版续传匹配用）。
     pub(crate) meta: Option<PathBuf>,
+    /// 是否启用块级续传（双方声明 `chunkmap`，M11）。
+    pub(crate) use_chunkmap: bool,
+    /// 协商后的块大小（字节；1MB 或 2MB）。
+    pub(crate) block_size: usize,
+    /// 块表（发送端在 send_file 计算；接收端收到 FILE_BLOCK_MAP 后填充）。
+    pub(crate) chunk_map: Option<ChunkMap>,
+    /// 接收端块位图（M11）。
+    pub(crate) bitmap: Option<BlockBitmap>,
+    /// 接收端随机写句柄（M11；与 `file` 二选一）。
+    pub(crate) chunk_file: Option<Arc<std::sync::Mutex<std::fs::File>>>,
+    /// 距上次位图落盘的块数。
+    pub(crate) blocks_since_flush: usize,
+    /// 发送端等待接收方位图（FILE_HAVE）。
+    pub(crate) have_tx: Option<oneshot::Sender<BlockBitmap>>,
 }
 
 /// 传输中心：任务表 + 帧路由。
@@ -409,6 +424,60 @@ pub(crate) async fn hash_file(path: &Path) -> Result<String, TransferError> {
     .await
     .map_err(|e| TransferError::Io(std::io::Error::other(e)))??;
     Ok(digest)
+}
+
+/// 一次读取同时计算整文件 sha256 与块表（M11：避免为大文件多读一遍）。
+pub(crate) async fn hash_file_with_blocks(
+    path: &Path,
+    block_size: usize,
+) -> Result<(String, ChunkMap), TransferError> {
+    let path = path.to_path_buf();
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<(String, ChunkMap), std::io::Error> {
+            use std::io::Read;
+            let mut file = std::fs::File::open(&path)?;
+            let mut hasher = Sha256::new();
+            let mut map = ChunkMap::empty(block_size as u32).map_err(std::io::Error::other)?;
+            let mut buf = vec![0u8; block_size];
+            loop {
+                let read = file.read(&mut buf)?;
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&buf[..read]);
+                map.push_hash(&buf[..read]);
+            }
+            Ok((format!("{:x}", hasher.finalize()), map))
+        })
+        .await
+        .map_err(|e| TransferError::Io(std::io::Error::other(e)))??;
+    Ok(result)
+}
+
+/// 协商块大小：双方声明 `chunk2m` 用 2MB，否则 1MB（v1 兼容）。
+pub(crate) async fn negotiated_block_size(inner: &Inner, peer_id: &str) -> usize {
+    if inner
+        .session
+        .peer_features(peer_id)
+        .await
+        .iter()
+        .any(|feature| feature == "chunk2m")
+    {
+        CHUNK_SIZE_2M
+    } else {
+        CHUNK_SIZE
+    }
+}
+
+/// 是否启用块级续传：本机声明 `chunkmap` 且对端也声明（双方都声明才启用）。
+pub(crate) async fn chunkmap_enabled(inner: &Inner, peer_id: &str) -> bool {
+    crate::session::LOCAL_FEATURES.contains(&"chunkmap")
+        && inner
+            .session
+            .peer_features(peer_id)
+            .await
+            .iter()
+            .any(|feature| feature == "chunkmap")
 }
 
 /// 校验并提取安全的落盘文件名，拒绝路径穿越（rules.md R5.2）。
@@ -540,7 +609,15 @@ impl TransferManager {
             .map(|n| n.to_string())
             .ok_or_else(|| TransferError::UnsafeFileName(path_to_string(path)))?;
         let kind = TransferKind::from_path(path);
-        let sha256 = hash_file(path).await?;
+        // M11：双方声明 chunkmap 时一次读取同时算整文件哈希与块表；否则沿用原流程。
+        let block_size = negotiated_block_size(&self.inner, peer_id).await;
+        let use_chunkmap = chunkmap_enabled(&self.inner, peer_id).await;
+        let (sha256, chunk_map) = if use_chunkmap {
+            let (sha, map) = hash_file_with_blocks(path, block_size).await?;
+            (sha, Some(map))
+        } else {
+            (hash_file(path).await?, None)
+        };
         let size = metadata.len();
         let transfer_id = uuid::Uuid::new_v4().to_string();
 
@@ -580,6 +657,13 @@ impl TransferManager {
                     last_activity: Instant::now(),
                     resume_from: 0,
                     meta: None,
+                    use_chunkmap,
+                    block_size,
+                    chunk_map,
+                    bitmap: None,
+                    chunk_file: None,
+                    blocks_since_flush: 0,
+                    have_tx: None,
                 },
             );
         }
@@ -809,8 +893,33 @@ impl TransferManager {
                 }
                 Ok(())
             }
-            // 块级续传帧（M11）：能力未声明时不会收到；S1 阶段先忽略，S2/S3 接入发送与接收流程。
-            FrameType::FileBlockMap | FrameType::FileHave | FrameType::FileResumeState => Ok(()),
+            // 块级续传帧（M11）：BLOCK_MAP 由接收端处理并回 HAVE；HAVE 交给等待中的发送任务。
+            FrameType::FileBlockMap => {
+                let map: FileBlockMap = frame.parse_json()?;
+                receiver::on_block_map(self.inner.clone(), map).await
+            }
+            FrameType::FileHave => {
+                let have: FileHave = frame.parse_json()?;
+                let waiter = {
+                    let mut tasks = self.inner.tasks.lock().await;
+                    tasks.get_mut(&have.transfer_id).and_then(|task| {
+                        let blocks = task
+                            .chunk_map
+                            .as_ref()
+                            .map(|map| map.block_count())
+                            .unwrap_or(0);
+                        task.have_tx.take().map(|tx| (tx, blocks))
+                    })
+                };
+                if let Some((tx, blocks)) = waiter {
+                    if let Ok(bitmap) = BlockBitmap::from_hex(&have.bitmap, blocks) {
+                        let _ = tx.send(bitmap);
+                    }
+                }
+                Ok(())
+            }
+            // 重连恢复帧暂未使用（保留编号，避免与未来版本冲突）。
+            FrameType::FileResumeState => Ok(()),
             FrameType::FileCancel => {
                 let cancel: FileCancel = frame.parse_json()?;
                 let notify = {

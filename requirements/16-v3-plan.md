@@ -508,3 +508,20 @@ message({ type: "success" | "error" | "info", text: string, duration = 1500 }): 
   - exe：13.40 MB，SHA-256 `DF2318394BC296119A6DA50106275CDEBA8C98CF969B0FDD8DA997FD7E2F240F`。
 
 
+
+### I6.14 · M11 S2–S4：块级续传落地（2026-11-14）
+
+| # | 项 | 实现 |
+|---|---|---|
+| 1 | 发送端（S2） | `send_file` 在双方声明 `chunkmap` 时用 `hash_file_with_blocks` 一次读取同时算整文件 sha256 与块表；`sender::run` 收到 ACCEPT 后发 `FILE_BLOCK_MAP`、等 `FILE_HAVE`（10s 超时按全缺失），按位图缺失索引 `seek` 读取发送（seq = 块索引）；`FileResult.error` 分类透传到失败原因 |
+| 2 | 接收端（S3） | `accept` 回 ACCEPT（`resume_offset=0`）；`on_block_map` 校验块大小/块数 → 预分配 `.part` → 加载/新建 `.bitmap` → 回 `FILE_HAVE`；`on_chunk_map` 校验块短哈希 + 随机写（`std::fs::File` + `Mutex`）+ 位图每 32 块原子落盘；`on_done_map` 校验位图全满 + 重新计算整文件 sha256 → rename / `missing_blocks` / `file_hash_mismatch` |
+| 3 | 降级兼容（S4） | `LOCAL_FEATURES` 加 `chunkmap`（双方声明才启用）；未声明 → 原顺序写 + v1 偏移续传；声明但块表未到（异常/旧端）→ `on_chunk` 懒创建顺序句柄复用旧逻辑 |
+| 4 | 清理规则 | 成功：删 `.bitmap` + 续传元数据；取消/拒绝：删 `.part` + `.bitmap` + 元数据；校验失败/断线：保留（重试时按位图只补缺失块） |
+| 5 | 测试 | 新增集成：`chunkmap_transfers_multi_block_file`（2.5MB 多块）、`legacy_peer_falls_back_without_chunkmap`（空 features 模拟旧端）；协议 `FileResult.error` 断言更新 |
+
+- **门禁**：`cargo test` lib **121** + 集成 **24**（file_transfer 12 / discovery 5 / text 5 / reconnect 2）；`clippy -D warnings` 0、`fmt` 0；前端未改（`npm run test` 234 基线不变）。
+- **行为说明**：
+  - 接收端回 `missing_blocks:N` 时发送端标记失败并展示分类；用户「重试」会重新 OFFER，接收端加载位图后只补缺失块（自动有限次补发暂未实现）。
+  - 位图损坏/缺失时从零开始（尚未实现按 `.part` 重建）；`.part` 已预分配为 size，重试不受文件长度影响。
+- **待办**：1GB 真机断网续传验收、断线重连后的位图续传验证、最终出包（用户要求最后统一打包）。
+

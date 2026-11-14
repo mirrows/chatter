@@ -32,9 +32,9 @@
 | 阶段 | 内容 | 交付物 | 预估 |
 |---|---|---|---|
 | S1 协议与位图地基（✅ 2026-11-14 已完成） | `FILE_BLOCK_MAP` / `FILE_HAVE` / `FILE_RESUME_STATE` 帧与 payload；`transfer/chunkmap.rs`：块表（流式计算 + 帧互转）、块位图（置位/缺失/hex）、CRC32、位图原子落盘与校验加载 | 协议往返 + 块表/位图 9 个单测；**`chunkmap` 未声明**，现有流程不变 | 已完成 |
-| S2 发送端 | 双方声明 `chunkmap` 时：OFFER 后发 BLOCK_MAP（流式计算块哈希）→ 收 HAVE → 只发缺失块（`seek`）→ DONE 后按结果有限次补发 | `sender.rs` 新分支 + 与 v1 偏移续传并存 | 2–3 人日 |
-| S3 接收端 | ACCEPT 后回 HAVE（读位图）；`on_chunk` 改随机写 + 块哈希校验 + 位图更新（每 32 块/5s 落盘）；DONE 校验位图全满 + 整文件 SHA-256；失败分类 `missing_blocks` / `block_hash_mismatch` / `file_hash_mismatch`；清理规则（成功删位图、取消/拒绝/失败删 `.part`+`.bitmap`、断线保留） | `receiver.rs` + 位图集成测试（乱序/重复/损坏块） | 2–3 人日 |
-| S4 协商与验收 | `LOCAL_FEATURES` 加入 `chunkmap`；兼容矩阵回归（v2↔v2 / v2↔v1 四种组合）；断线 + 重启续传集成测试；1GB 真机断网续传验收；出包 | 测试 + APK/exe + `16`/`17` 记录 | 2–3 人日 |
+| S2 发送端（✅ 2026-11-14 已完成） | OFFER 前一次读取同时算整文件 sha256 与块表；ACCEPT 后发 BLOCK_MAP → 等 HAVE（10s 超时按全缺失）→ 只发缺失块（seek）；FILE_RESULT.error 透传 | `sender.rs` 新增分支 + `hash_file_with_blocks` | 已完成 |
+| S3 接收端（✅ 2026-11-14 已完成） | 预分配 `.part`、加载/新建位图并回 HAVE；块哈希校验 + 随机写；位图每 32 块原子落盘；DONE 校验位图全满 + 重算 sha256；失败分类与清理规则 | `receiver.rs` 新增 `on_block_map` / `on_chunk_map` / `on_done_map` | 已完成 |
+| S4 协商与验收（✅ 2026-11-14 已完成，真机待验） | `LOCAL_FEATURES` 加 `chunkmap`；旧端（未声明）自动降级；新增多块 + 旧端降级集成用例 | 集成 24（file_transfer 12 / discovery 5 / text 5 / reconnect 2） | 真机 1GB 断网续传待验收 |
 
 > 风险与约束：块大小不一致时丢弃旧块状态；位图损坏时按 `.part` 重建；对端未声明 `chunkmap` 时**必须**回到 v1 偏移续传（现有行为不变）。
 

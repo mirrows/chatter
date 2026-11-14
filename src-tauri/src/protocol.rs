@@ -361,6 +361,9 @@ pub struct FileResult {
     pub ok: bool,
     /// 接收端落盘路径（仅成功时有值，供发送端展示）。
     pub path: Option<String>,
+    /// 失败原因分类（M11：`missing_blocks` / `block_hash_mismatch` / `file_hash_mismatch`）。
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// 每块哈希的十六进制长度（SHA-256 前 8 字节 → 16 个字符）。
@@ -676,19 +679,21 @@ mod tests {
             transfer_id: "t-1".to_string(),
             ok: true,
             path: Some("C:/Downloads/photo.png".to_string()),
+            error: None,
         };
         let failed = FileResult {
             transfer_id: "t-1".to_string(),
             ok: false,
             path: None,
+            error: Some("missing_blocks".to_string()),
         };
         let ok_json = serde_json::to_string(&ok).unwrap();
         assert!(ok_json.contains("\"ok\":true"));
         assert!(ok_json.contains("\"path\":\"C:/Downloads/photo.png\""));
-        assert_eq!(
-            serde_json::to_string(&failed).unwrap(),
-            "{\"transfer_id\":\"t-1\",\"ok\":false,\"path\":null}"
-        );
+        let failed_json = serde_json::to_string(&failed).unwrap();
+        assert!(failed_json.contains("\"ok\":false"));
+        assert!(failed_json.contains("\"path\":null"));
+        assert!(failed_json.contains("\"error\":\"missing_blocks\""));
     }
 
     /// 正常路径：块级续传帧类型（0x17–0x19）可往返转换，且不与已有帧冲突。

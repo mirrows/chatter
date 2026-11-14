@@ -22,7 +22,7 @@ pub const DEFAULT_ACK_TIMEOUT: Duration = Duration::from_secs(3);
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
 /// 本机声明的能力（v2）。`chunkmap` 在 M11 实现后加入，避免对端发送无法处理的帧。
-pub const LOCAL_FEATURES: &[&str] = &["chunk2m"];
+pub const LOCAL_FEATURES: &[&str] = &["chunk2m", "chunkmap"];
 /// 自动重连退避间隔（秒），最多尝试 3 次（v2/M10）。
 pub const RECONNECT_DELAYS: [u64; 3] = [5, 15, 30];
 

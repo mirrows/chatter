@@ -62,6 +62,16 @@ pub struct ChunkMap {
 }
 
 impl ChunkMap {
+    /// 新建空块表（边读边用 `push_hash` 追加）。
+    pub fn empty(block_size: u32) -> Result<Self, String> {
+        Self::new(block_size, Vec::new())
+    }
+
+    /// 追加一块数据的短哈希（流式计算块表时使用）。
+    pub fn push_hash(&mut self, data: &[u8]) {
+        self.hashes.extend_from_slice(&block_hash(data));
+    }
+
     /// 用块大小与哈希序列构造（`hashes` 长度必须是 8 的整数倍）。
     pub fn new(block_size: u32, hashes: Vec<u8>) -> Result<Self, String> {
         if block_size == 0 || block_size as usize > CHUNK_SIZE_2M {
@@ -145,6 +155,11 @@ impl ChunkMap {
         }
         Self::new(frame.block_size, hashes)
     }
+}
+
+/// 位图文件路径（与 `.part` 同目录、同前缀：`<key>.part` → `<key>.bitmap`）。
+pub fn bitmap_path_for(part: &Path) -> std::path::PathBuf {
+    part.with_extension("bitmap")
 }
 
 /// 块位图：位序 = 块索引（低位优先），每 8 块 1 字节。

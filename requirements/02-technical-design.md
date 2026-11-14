@@ -143,10 +143,17 @@ magic = "CHTRS"（5 字节，与发现协议 magic 一致）；帧头共 10B；l
 7. **降级**：对端未声明 `chunkmap` → 使用 v1 字节偏移续传（`FILE_ACCEPT.resume_offset`），其余流程不变。
 8. **清理**：成功删位图并改名；取消/拒绝/校验失败删 `.part` + `.bitmap`；超时/断线保留两者。
 
-> **实现进度（2026-11-14，S1 已完成）**：`protocol.rs` 已加入 `FILE_BLOCK_MAP(0x17)` / `FILE_HAVE(0x18)` /
-> `FILE_RESUME_STATE(0x19)` 与对应 payload 结构；`transfer/chunkmap.rs` 提供块表（流式计算、帧互转）、
-> 块位图（置位/缺失/十六进制互转）、CRC32 与位图原子落盘/校验加载。**`chunkmap` 能力尚未声明**，
-> 现有传输仍走 v1 偏移续传；S2（发送端）/ S3（接收端）/ S4（协商与验收）见 `17-v3-followups.md` §2.2.1。
+> **实现进度（2026-11-14，S1–S4 已完成）**：
+> - **协议**：`FILE_BLOCK_MAP(0x17)` / `FILE_HAVE(0x18)` / `FILE_RESUME_STATE(0x19)` 与 payload；
+> - **发送端**：OFFER 前一次读取同时算整文件 sha256 与块表；ACCEPT 后发 BLOCK_MAP，等 HAVE（10s 超时按"全缺失"），
+>   按位图缺失索引 `seek` 读取并发送；
+> - **接收端**：`accept` 回 ACCEPT（offset 0）→ 收到 BLOCK_MAP 后预分配 `.part`、加载/新建位图并回 HAVE；
+>   数据块做块哈希校验 + 随机写，位图每 32 块原子落盘；DONE 时校验位图全满并重新计算整文件 sha256，
+>   失败分类 `missing_blocks` / `file_hash_mismatch`；
+> - **协商/降级**：`LOCAL_FEATURES` 已含 `chunkmap`（双方声明才启用）；未声明或块表未到时自动回到顺序写 + 偏移续传；
+> - **清理**：成功删位图与元数据；取消/拒绝删 `.part` + `.bitmap`；校验失败保留（下次重试只补缺失块）。
+>
+> 遗留：DONE 后自动补发缺失块未做（由用户「重试」触发，重试会按位图只补缺失块）；位图损坏时从零开始（未按 `.part` 重建）。
 
 ### 4.8 版本与能力协商（v2 / M10）
 
