@@ -248,7 +248,7 @@ D:\tools\gradle\gradle-9.6.1\bin\gradle.bat assembleArm64Release -x rustBuildArm
 |---|---|
 | 签名包 | `src-tauri/target/android/Chatters-1.0.0-rc.1-arm64-debugsigned.apk` |
 | 大小 | 11.13 MB（中间件 aligned 11.07 MB） |
-| SHA-256 | `C72C07A6E8D3085B9894CCA93AFDD44169025356ABB36520E1824A61A6E88E05`（2026-11-14 v3/I6.10 最终包） |
+| SHA-256 | `38667C1B1DC40BD4BE45477D917FC13D965CA378624AAADF21AAB4AE17237D7E`（2026-11-14 v3/I6.13 最终包） |
 | 原生库 | `lib/arm64-v8a/libchatters_lib.so`（9.38 MB，含当前前端资源） |
 | 包名 / 版本 | `com.chatters.app` / versionCode `1000000`，versionName `1.0.0-rc.1` |
 | SDK | minSdk `24`、targetSdk `36`、compileSdk `36` |

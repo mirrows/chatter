@@ -503,4 +503,8 @@ message({ type: "success" | "error" | "info", text: string, duration = 1500 }): 
 
 - **限制**：只支持单个 `ACTION_SEND`（`SEND_MULTIPLE` 暂不支持）；文件在「选中设备」后才复制到缓存（大文件期间会等待，与现有选择器一致）。
 - **门禁**：`npm run test` **234 passed（27 文件）**（新增 share store 5 例、设备页分享提示 1 例）；`cargo test` lib **121**（新增 `share::validate` 2 例）+ 集成 22；`clippy`/`fmt`/`lint`/`vue-tsc`/`prettier` 全绿；`cargo check --target aarch64-linux-android` 通过。
+- **产物**（内嵌 `index-PaQBxUHd.js` / `index-B68X56oA.css`）：
+  - APK：11.34 MB，SHA-256 `38667C1B1DC40BD4BE45477D917FC13D965CA378624AAADF21AAB4AE17237D7E`。
+  - exe：13.40 MB，SHA-256 `DF2318394BC296119A6DA50106275CDEBA8C98CF969B0FDD8DA997FD7E2F240F`。
+
 
