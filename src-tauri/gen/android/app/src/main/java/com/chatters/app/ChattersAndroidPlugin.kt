@@ -103,6 +103,18 @@ class ChattersAndroidPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
+  /**
+   * 取走系统分享内容（v3，Android ACTION_SEND）。
+   *
+   * 无分享时返回空对象；有分享时返回 `{ kind: "text", text }` 或
+   * `{ kind: "file", uri, name, mime }`。
+   */
+  @Command
+  fun takeShare(invoke: Invoke) {
+    val pending = ShareInbox.take()
+    invoke.resolve(pending ?: JSObject())
+  }
+
   /** 用系统查看器打开私有目录里的文件（FileProvider 授权临时读权限）。 */
   @Command
   fun openFile(invoke: Invoke) {

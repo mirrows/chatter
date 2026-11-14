@@ -28,6 +28,7 @@ import DeviceList from "../../src/views/DeviceList.vue";
 import { useChatStore } from "../../src/stores/chat";
 import { useDeviceStore } from "../../src/stores/devices";
 import { useMessageStore } from "../../src/stores/message";
+import { useShareInboxStore } from "../../src/stores/shareInbox";
 
 const peer: DeviceEntry = {
   deviceId: "id-1",
@@ -112,6 +113,18 @@ describe("device add & notice", () => {
     expect(wrapper.find('[data-testid="device-notice"]').exists()).toBe(false);
     // 提示出现在全局 message 队列里
     expect(messages.visible.map((item) => item.text)).toEqual(["PC-8f3a 已上线"]);
+  });
+
+  it("系统分享待发送提示显示在设备页，可取消（v3）", async () => {
+    const share = useShareInboxStore();
+    share.pending = { kind: "text", text: "共享的一段文字" };
+
+    const wrapper = mount(DeviceList);
+    expect(wrapper.get('[data-testid="device-share-hint"]').text()).toContain("共享的一段文字");
+
+    await wrapper.get('[data-testid="device-share-dismiss"]').trigger("click");
+    expect(share.pending).toBeNull();
+    expect(wrapper.find('[data-testid="device-share-hint"]').exists()).toBe(false);
   });
 
   it("未读消息在设备列表显示徽标（F42）", async () => {

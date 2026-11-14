@@ -25,7 +25,7 @@
         @back="activePeer = null"
       />
       <Settings v-else-if="view === 'settings'" />
-      <DeviceList v-else @select="openChat" />
+      <DeviceList v-else @select="handleSelect" />
     </div>
 
     <!-- 全局单例浮层（v3）：右键/长按菜单、图片预览、确认弹窗、提示条 -->
@@ -47,12 +47,14 @@ import ImagePreviewHost from "./components/ImagePreviewHost.vue";
 import MessageHost from "./components/MessageHost.vue";
 import PromptHost from "./components/PromptHost.vue";
 import Settings from "./views/Settings.vue";
-import type { DeviceEntry } from "./api/types";
+import type { DeviceEntry, SharePayload } from "./api/types";
 import { t } from "./i18n";
 import { useChatStore } from "./stores/chat";
 import { useDeviceStore } from "./stores/devices";
+import { message as toast } from "./stores/message";
 import { usePeerAliasStore } from "./stores/peerAliases";
 import { useSettingsStore } from "./stores/settings";
+import { useShareInboxStore } from "./stores/shareInbox";
 import { useTransferStore } from "./stores/transfers";
 import { blockContextMenu } from "./utils/contextmenu";
 
@@ -61,6 +63,7 @@ const chat = useChatStore();
 const transfers = useTransferStore();
 const settings = useSettingsStore();
 const aliases = usePeerAliasStore();
+const shareInbox = useShareInboxStore();
 const activePeer = ref<DeviceEntry | null>(null);
 const view = ref<"devices" | "settings">("devices");
 let unblockContextMenu: (() => void) | null = null;
@@ -68,6 +71,33 @@ let unblockContextMenu: (() => void) | null = null;
 /** 打开与某台设备的会话（F10）。 */
 function openChat(device: DeviceEntry) {
   activePeer.value = device;
+}
+
+/**
+ * 选择设备（v3）：若存在系统分享内容，先发送给该设备，再进入会话。
+ *
+ * 文本直接发；文件先由 Kotlin 复制到缓存再按路径发送（大文件可能需要等待）。
+ */
+async function handleSelect(device: DeviceEntry) {
+  const pending = shareInbox.pending;
+  if (pending) {
+    shareInbox.clear();
+    const ok = await sendShared(device, pending);
+    if (ok) toast.success(t("share.sent"));
+    else toast.error(t("share.failed"));
+  }
+  openChat(device);
+}
+
+/** 发送系统分享内容；返回是否成功。 */
+async function sendShared(device: DeviceEntry, pending: SharePayload): Promise<boolean> {
+  if (pending.kind === "text") {
+    return chat.send(device.deviceId, pending.text);
+  }
+  const path = await shareInbox.importFile(pending.uri);
+  if (!path) return false;
+  const info = await transfers.sendPath(device.deviceId, path);
+  return info !== null;
 }
 
 /**
@@ -79,6 +109,8 @@ function openChat(device: DeviceEntry) {
 function onActive() {
   if (document.visibilityState !== "visible") return;
   void devices.refresh();
+  // 分享可能在后台期间产生：回到前台时再取一次（v3）。
+  void shareInbox.refresh();
 }
 
 // 启动时拉取设备快照、订阅设备/消息/传输事件，并应用主题（F1/F4/F10/F33/F52）。
@@ -92,6 +124,8 @@ onMounted(() => {
   void chat.init();
   void transfers.init();
   void settings.load().then(() => settings.applyTheme());
+  // 冷启动可能带着系统分享进来（v3）：进入后立即取一次
+  void shareInbox.refresh();
   document.addEventListener("visibilitychange", onActive);
   window.addEventListener("focus", onActive);
 });

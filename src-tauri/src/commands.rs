@@ -719,6 +719,28 @@ pub async fn pick_download_dir(app: tauri::AppHandle) -> Result<Option<String>, 
     }
 }
 
+/// 取走系统分享内容（v3，Android `ACTION_SEND`）；无分享或桌面端返回 `None`。
+#[tauri::command]
+pub async fn take_share_payload() -> Result<Option<crate::share::SharePayload>, String> {
+    Ok(crate::share::take_pending())
+}
+
+/// 把系统分享的 `content://` 导入缓存并返回本地路径（v3，Android）。
+#[tauri::command]
+pub async fn import_shared_file(uri: String) -> Result<String, String> {
+    #[cfg(target_os = "android")]
+    {
+        tauri::async_runtime::spawn_blocking(move || crate::platform::android::import_file(&uri))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = uri;
+        Err("桌面端不需要导入分享文件".to_string())
+    }
+}
+
 /// 打开下载目录（v3 需求 6）：桌面端用系统文件管理器打开，目录不存在时先创建。
 ///
 /// Android 的私有目录无法用文件管理器打开，返回明确错误（前端按平台隐藏入口）。

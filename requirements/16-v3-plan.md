@@ -491,3 +491,16 @@ message({ type: "success" | "error" | "info", text: string, duration = 1500 }): 
 - **门禁**：`cargo test` lib **119**（+9：帧类型往返、块表 hash_at/JSON、CRC32 参考值、位图置位/缺失/hex/填充位、位图落盘-加载/损坏分类、块表流式构建与帧互转、非法输入）+ 集成 22；`clippy -D warnings` 0、`fmt` 0。
 - **下一步**：S2 发送端（BLOCK_MAP → HAVE → 只发缺失块）→ S3 接收端（随机写 + 位图 + 完整性判定）→ S4 协商与真机验收（见 `17-v3-followups.md` §2.2.1）。
 
+
+### I6.13 · 系统分享入口（Android ACTION_SEND，2026-11-14）
+
+| # | 项 | 实现 |
+|---|---|---|
+| 1 | 接收分享 | `AndroidManifest.xml` 为 `MainActivity` 增加 `ACTION_SEND` + `*/*` filter；`MainActivity` 在 `onCreate`/`onNewIntent`（`singleTask`）解析 `EXTRA_TEXT` 或 `EXTRA_STREAM`，写入新增的 `ShareInbox` 单例（只保留最近一次） |
+| 2 | 取用与导入 | 插件命令 `takeShare`（无分享返回空对象）→ Rust `take_share_payload()`（消费型，取走即清空、校验 kind/内容）；`import_shared_file(uri)` 复用 Kotlin `importFile` 把 `content://` 复制到 `cacheDir/imports/` |
+| 3 | 前端交互 | 新增 `stores/shareInbox`（`pending` / `summary` / `importFile`）；App 在启动与回到前台时 `refresh()`；设备页显示「已收到分享：{summary}，点选设备即可发送」+「取消」；点设备后 **文本走 `chat.send`**、**文件先 import 再 `transfers.sendPath`**，结果用 `message` 提示并进入该会话 |
+| 4 | 平台范围 | 仅 Android；桌面端 `take_share_payload` 恒为 `null`，界面无变化 |
+
+- **限制**：只支持单个 `ACTION_SEND`（`SEND_MULTIPLE` 暂不支持）；文件在「选中设备」后才复制到缓存（大文件期间会等待，与现有选择器一致）。
+- **门禁**：`npm run test` **234 passed（27 文件）**（新增 share store 5 例、设备页分享提示 1 例）；`cargo test` lib **121**（新增 `share::validate` 2 例）+ 集成 22；`clippy`/`fmt`/`lint`/`vue-tsc`/`prettier` 全绿；`cargo check --target aarch64-linux-android` 通过。
+

@@ -249,6 +249,8 @@ src/
 | `report_error(scope, message)` | 上报未知错误到本地日志（v3），返回 `{ dir, file, hasLogs }` |
 | `get_error_log()` | 读取错误日志位置与「目录内是否已有日志」（v3，设置页据此显隐入口） |
 | `open_error_log_dir()` | 打开错误日志目录（v3，桌面端；Android 返回错误，前端改为展示路径） |
+| `take_share_payload()` | 取走系统分享内容（v3，Android `ACTION_SEND`；无分享或桌面端返回 null） |
+| `import_shared_file(uri)` | 把分享的 `content://` 导入缓存并返回本地路径（v3，Android） |
 
 事件：`device://update`、`message://new`、`transfer://update`、`session://update`（会话连接状态）。
 

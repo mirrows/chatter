@@ -41,6 +41,19 @@
 
     <p v-if="store.error" class="error" data-testid="device-error">{{ store.error }}</p>
 
+    <!-- 系统分享待发送（v3）：选择设备后自动发送 -->
+    <div v-if="share.pending" class="share-hint" data-testid="device-share-hint">
+      <span class="share-text">{{ t("share.pending", { summary: share.summary }) }}</span>
+      <button
+        type="button"
+        class="share-close"
+        data-testid="device-share-dismiss"
+        @click="share.clear()"
+      >
+        {{ t("share.dismiss") }}
+      </button>
+    </div>
+
     <ul v-if="store.count > 0" class="list" :class="{ 'is-card': isMobile }">
       <li v-for="d in store.devices" :key="d.deviceId" data-testid="device-item">
         <div
@@ -89,6 +102,7 @@ import { message } from "../stores/message";
 import { usePeerAliasStore } from "../stores/peerAliases";
 import { promptDialog } from "../stores/prompt";
 import { useSettingsStore } from "../stores/settings";
+import { useShareInboxStore } from "../stores/shareInbox";
 
 const emit = defineEmits<{ select: [device: DeviceEntry] }>();
 
@@ -96,6 +110,7 @@ const store = useDeviceStore();
 const chat = useChatStore();
 const aliases = usePeerAliasStore();
 const settings = useSettingsStore();
+const share = useShareInboxStore();
 const { isAndroid } = usePlatform();
 const addrInput = ref("");
 
@@ -279,6 +294,32 @@ h2 {
 .error {
   color: #c2410c;
   font-size: 13px;
+}
+/* 系统分享待发送提示（v3） */
+.share-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 13px;
+}
+.share-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.share-close {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 13px;
+  cursor: pointer;
 }
 .badge {
   background: var(--accent);

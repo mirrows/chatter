@@ -13,6 +13,7 @@ import type {
   SaveSettingsResult,
   SessionUpdate,
   Settings,
+  SharePayload,
   TextSendResult,
   TransferInfo,
 } from "./types";
@@ -49,6 +50,16 @@ export function sendText(peerId: string, text: string): Promise<TextSendResult> 
 /** 重发一条失败消息（v3）：复用原 msg_id，历史与界面都只保留一条。 */
 export function resendText(msgId: string): Promise<TextSendResult> {
   return invoke<TextSendResult>("resend_text", { msgId });
+}
+
+/** 取走系统分享内容（v3，Android `ACTION_SEND`）；无分享返回 null。 */
+export function takeSharePayload(): Promise<SharePayload | null> {
+  return invoke<SharePayload | null>("take_share_payload");
+}
+
+/** 把系统分享的 `content://` 导入缓存并返回本地路径（v3，Android）。 */
+export function importSharedFile(uri: string): Promise<string> {
+  return invoke<string>("import_shared_file", { uri });
 }
 
 /** 订阅设备上下线事件（F4），返回取消订阅函数。 */

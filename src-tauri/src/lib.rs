@@ -15,6 +15,7 @@ pub mod errorlog;
 pub mod platform;
 pub mod protocol;
 pub mod session;
+pub mod share;
 pub mod storage;
 pub mod transfer;
 
@@ -489,6 +490,8 @@ pub fn run() -> Result<(), tauri::Error> {
             commands::get_history,
             commands::get_history_page,
             commands::clear_history,
+            commands::take_share_payload,
+            commands::import_shared_file,
             commands::open_download_dir,
             commands::pick_download_dir,
             commands::report_error,

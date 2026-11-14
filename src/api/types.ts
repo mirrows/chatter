@@ -146,6 +146,10 @@ export interface ErrorLogInfo {
   hasLogs: boolean;
 }
 
+/** 系统分享内容（v3，Android `ACTION_SEND`）。 */
+export type SharePayload =
+  { kind: "text"; text: string } | { kind: "file"; uri: string; name?: string | null };
+
 /** 历史中的一条消息（与 Rust StoredMessage 对应）。 */
 export interface StoredMessage {
   msgId: string;

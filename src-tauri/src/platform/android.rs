@@ -117,6 +117,16 @@ pub fn import_file(uri: &str) -> Result<String, String> {
     call::<Imported>("importFile", ImportRequest { uri }).map(|imported| imported.path)
 }
 
+/// 取走系统分享（v3，`ACTION_SEND`）：无分享时返回 `None`。
+///
+/// Kotlin 侧 `takeShare` 返回 `{}`（无分享）或 `{ kind, text | uri, name }`。
+pub fn take_share() -> Option<crate::share::SharePayload> {
+    let value = call::<serde_json::Value>("takeShare", serde_json::json!({})).ok()?;
+    let payload: crate::share::SharePayload = serde_json::from_value(value).ok()?;
+    crate::share::validate(&payload).ok()?;
+    Some(payload)
+}
+
 /// 传输期间启动前台服务（常驻通知，避免被系统挂起）。
 pub fn start_foreground(title: &str, body: &str) -> Result<(), String> {
     call::<serde_json::Value>("startForegroundService", ForegroundRequest { title, body })

@@ -1,7 +1,9 @@
 package com.chatters.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.View
@@ -10,6 +12,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import app.tauri.plugin.JSObject
 
 class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -17,9 +20,49 @@ class MainActivity : TauriActivity() {
     // 这里不需要（也没有）registerPlugin 调用。
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    captureShareIntent(intent)
     applySystemBarInsets()
     requestNotificationPermissionIfNeeded()
   }
+
+  /** singleTask 复用实例：从其他应用分享进来时走这里（v3）。 */
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    captureShareIntent(intent)
+  }
+
+  /**
+   * 解析 ACTION_SEND：文本直接带走；文件取 content://（选择设备后再导入缓存，避免启动卡顿）。
+   *
+   * 只处理单个分享；多个（ACTION_SEND_MULTIPLE）暂不支持，忽略。
+   */
+  private fun captureShareIntent(intent: Intent?) {
+    if (intent?.action != Intent.ACTION_SEND) return
+    val type = intent.type ?: return
+    val payload = JSObject()
+    if (type.startsWith("text/")) {
+      val text = intent.getStringExtra(Intent.EXTRA_TEXT) ?: return
+      payload.put("kind", "text")
+      payload.put("text", text)
+    } else {
+      val uri = streamUri(intent) ?: return
+      payload.put("kind", "file")
+      payload.put("uri", uri.toString())
+      payload.put("name", intent.getStringExtra(Intent.EXTRA_TITLE))
+      payload.put("mime", type)
+    }
+    ShareInbox.set(payload)
+  }
+
+  /** 兼容 Android 13+ 的 Parcelable 读取方式。 */
+  private fun streamUri(intent: Intent): Uri? =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+    } else {
+      @Suppress("DEPRECATION")
+      intent.getParcelableExtra(Intent.EXTRA_STREAM)
+    }
 
   /**
    * 适配不同机型的顶部/底部安全区与软键盘。
