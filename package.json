@@ -22,9 +22,12 @@
     "@vitejs/plugin-vue": "^6.0.0",
     "@vue/test-utils": "^2.4.0",
     "eslint": "^9.0.0",
+    "eslint-plugin-vue": "^10.12.1",
+    "globals": "^17.14.0",
     "jsdom": "^27.0.0",
     "prettier": "^3.0.0",
     "typescript": "^5.9.0",
+    "typescript-eslint": "^8.72.2",
     "vite": "^7.0.0",
     "vitest": "^4.0.0",
     "vue-tsc": "^3.0.0"

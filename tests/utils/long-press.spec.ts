@@ -2,7 +2,11 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { defineComponent } from "vue";
 import { mount } from "@vue/test-utils";
-import { useLongPress, type LongPressPoint } from "../../src/composables/useLongPress";
+import {
+  useLongPress,
+  type LongPressHandlers,
+  type LongPressPoint,
+} from "../../src/composables/useLongPress";
 
 /** 用最小组件承载 composable（onUnmounted 需要组件上下文）。 */
 function mountLongPress(handler: (point: LongPressPoint) => void) {
@@ -15,10 +19,15 @@ function mountLongPress(handler: (point: LongPressPoint) => void) {
     template: '<div data-testid="target" />',
   });
   const wrapper = mount(Comp);
-  return { wrapper, spy, handlers: (wrapper.vm as unknown as { longPress: any }).longPress };
+  return {
+    wrapper,
+    spy,
+    handlers: (wrapper.vm as unknown as { longPress: LongPressHandlers }).longPress,
+  };
 }
 
-const touch = (x: number, y: number) => ({ touches: [{ clientX: x, clientY: y }] });
+const touch = (x: number, y: number) =>
+  ({ touches: [{ clientX: x, clientY: y }] }) as unknown as TouchEvent;
 
 describe("useLongPress", () => {
   afterEach(() => {
