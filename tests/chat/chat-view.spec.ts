@@ -50,6 +50,7 @@ vi.mock("../../src/utils/clipboard", () => ({ copyText: clipboard.copyText }));
 // 必须在 mock 之后导入被测模块。
 import Chat from "../../src/views/Chat.vue";
 import { useChatStore } from "../../src/stores/chat";
+import { useConfirmStore } from "../../src/stores/confirm";
 import { useContextMenuStore } from "../../src/stores/contextMenu";
 import { useDeviceStore } from "../../src/stores/devices";
 import { useMessageStore } from "../../src/stores/message";
@@ -162,7 +163,7 @@ describe("Chat", () => {
     expect(wrapper.emitted("back")).toHaveLength(1);
   });
 
-  it("清空本会话记录调用后端并清空本地状态（F40）", async () => {
+  it("清空本会话记录需二次确认，确认后调用后端并轻提示（v3）", async () => {
     const store = useChatStore();
     store.receive({ peerId: "peer-1", msgId: "m-1", text: "hi", ts: 1000 });
     const wrapper = mount(Chat, { props });
@@ -170,17 +171,24 @@ describe("Chat", () => {
     await wrapper.get('[data-testid="chat-clear"]').trigger("click");
     await flushPromises();
 
+    // 未确认前不调用后端
+    expect(api.clearHistory).not.toHaveBeenCalled();
+    useConfirmStore().confirm();
+    await flushPromises();
+
     expect(api.clearHistory).toHaveBeenCalledWith("peer-1");
     expect(store.messagesFor("peer-1")).toHaveLength(0);
-    expect(wrapper.find('[data-testid="chat-notice-cleared"]').exists()).toBe(true);
+    // 结果改用 message 轻提示，不再占用对话区浮层（v3）
+    expect(useMessageStore().visible.map((item) => item.text)).toContain("本会话记录已清空");
+    expect(wrapper.find('[data-testid="chat-notice-cleared"]').exists()).toBe(false);
   });
 
-  it("store 错误以中文提示展示", () => {
+  it("store 错误以友好文案展示，不裸奔技术细节（v3）", () => {
     const store = useChatStore();
     store.error = "peer not found";
     const wrapper = mount(Chat, { props });
     expect(wrapper.get('[data-testid="chat-notice-error"]').text()).toContain(
-      "发送失败：peer not found",
+      "发送失败：操作失败，请稍后重试",
     );
   });
 
@@ -233,16 +241,16 @@ describe("Chat", () => {
     expect(texts).toEqual(["先到的文本", "后到的文本"]);
   });
 
-  it("传输失败时显示错误并可关闭（v2/M9）", async () => {
+  it("传输失败时显示友好错误并可关闭（v2/M9 / v3）", async () => {
     const transfers = useTransferStore();
     transfers.error = "unsupported file path";
     const wrapper = mount(Chat, { props });
 
     expect(wrapper.get('[data-testid="chat-notice-transfer"]').text()).toContain(
-      "操作失败：unsupported file path",
+      "操作失败：操作失败，请稍后重试",
     );
 
-    await wrapper.get('[data-testid="chat-notice-close"]').trigger("click");
+    await wrapper.get('[data-testid="notice-close"]').trigger("click");
     expect(transfers.error).toBe("");
   });
   it("接收完成的图片：气泡无按钮，菜单只有「另存为」（需求 3）", async () => {
@@ -340,7 +348,7 @@ describe("Chat", () => {
 
     // 第一条（会话错误）优先展示
     expect(wrapper.find('[data-testid="chat-notice-error"]').exists()).toBe(true);
-    await wrapper.get('[data-testid="chat-notice-close"]').trigger("click");
+    await wrapper.get('[data-testid="notice-close"]').trigger("click");
     await flushPromises();
     expect(store.error).toBe("");
     // 关闭后展示下一条（传输错误）
@@ -652,9 +660,11 @@ describe("Chat（v3 追加用例）", () => {
     await flushPromises();
     expect(api.getHistoryPage).toHaveBeenCalledTimes(1);
 
-    // 清空本会话（后端会真正删除该对端记录）
+    // 清空本会话（后端会真正删除该对端记录）；v3 起需二次确认
     api.clearHistory.mockResolvedValue(0);
     await wrapper.get('[data-testid="chat-clear"]').trigger("click");
+    await flushPromises();
+    useConfirmStore().confirm();
     await flushPromises();
     expect(store.messagesFor("peer-1")).toHaveLength(0);
 

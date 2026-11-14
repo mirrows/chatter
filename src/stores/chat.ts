@@ -237,5 +237,16 @@ export const useChatStore = defineStore("chat", {
       this.activePeer = "";
       this.error = "";
     },
+    /**
+     * 清空本地缓存的全部消息与未读（v3）。
+     *
+     * 与 `clear()` 的区别：**保持事件订阅**（`started` 不变），
+     * 用于设置页「清空全部历史」后立即让对话页变空，且不影响后续收消息。
+     */
+    resetAll() {
+      this.messages = [];
+      this.unread = {};
+      this.error = "";
+    },
   },
 });

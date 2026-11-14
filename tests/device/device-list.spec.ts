@@ -38,6 +38,8 @@ const localSettings: Settings = {
   theme: "light",
   autoAcceptImages: true,
   autoAcceptFiles: false,
+  autoCleanEnabled: false,
+  autoCleanDays: 7,
 };
 
 describe("DeviceList", () => {

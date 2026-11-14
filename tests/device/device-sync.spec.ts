@@ -97,7 +97,7 @@ describe("device store init", () => {
     await store.init();
 
     expect(store.started).toBe(false);
-    expect(store.error).toBe("ipc unavailable");
+    expect(store.error).toBe("操作失败，请稍后重试");
     expect(store.count).toBe(0);
   });
 

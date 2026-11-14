@@ -19,6 +19,7 @@ import {
 } from "../api/tauri";
 import type { PathSendResult, StoredTransfer, TransferInfo } from "../api/types";
 import { t } from "../i18n";
+import { friendlyError, reportUnknownError } from "../utils/errors";
 import { useChatStore } from "./chat";
 import { useDeviceStore } from "./devices";
 import { message, useMessageStore } from "./message";
@@ -40,6 +41,8 @@ export const useTransferStore = defineStore("transfers", {
     error: "",
     /** 最近一次拖拽中被拒绝的目录数量（F31）。 */
     folderRejected: 0,
+    /** 本次运行内出现过的任务（历史加载的不在此列，v3：决定是否显示重试）。 */
+    sessionIds: {} as Record<string, boolean>,
   }),
   getters: {
     /** 指定对端的传输任务（按文件名排序）。 */
@@ -50,6 +53,8 @@ export const useTransferStore = defineStore("transfers", {
         .sort((a, b) => a.filename.localeCompare(b.filename)),
     /** 等待用户确认的文件（F34）。 */
     pending: (state) => state.items.filter((t) => t.state === "pending"),
+    /** 是否本次运行内创建的任务（历史加载的失败任务不显示重试，v3）。 */
+    isSessionTask: (state) => (transferId: string) => Boolean(state.sessionIds[transferId]),
   },
   actions: {
     /** 插入或刷新一条任务快照。 */
@@ -57,6 +62,17 @@ export const useTransferStore = defineStore("transfers", {
       const index = this.items.findIndex((t) => t.transferId === info.transferId);
       if (index >= 0) this.items[index] = info;
       else this.items.push(info);
+      // 能走到这里的都是本次运行内产生/推进过的任务。
+      this.sessionIds[info.transferId] = true;
+    },
+    /**
+     * 统一记录错误（v3）：面向用户走友好兜底，原始信息写入本地错误日志。
+     *
+     * @param scope 日志里的来源标记（如 `transfers.send`）。
+     */
+    fail(scope: string, err: unknown) {
+      this.error = friendlyError(err);
+      void reportUnknownError(scope, err);
     },
     /** 应用一次后端推送（`transfer://update`）。 */
     apply(info: TransferInfo) {
@@ -78,7 +94,7 @@ export const useTransferStore = defineStore("transfers", {
         this.error = "";
       } catch (err) {
         this.started = false;
-        this.error = err instanceof Error ? err.message : String(err);
+        this.fail("transfers.init", err);
       }
     },
     /** 选择文件并发送（F20/F30）；用户取消选择时返回 null。 */
@@ -96,7 +112,7 @@ export const useTransferStore = defineStore("transfers", {
         this.error = "";
         return info;
       } catch (err) {
-        this.error = err instanceof Error ? err.message : String(err);
+        this.fail("transfers.pickAndSend", err);
         return null;
       } finally {
         if (preparing !== null) useMessageStore().remove(preparing);
@@ -110,7 +126,7 @@ export const useTransferStore = defineStore("transfers", {
         this.error = "";
         return info;
       } catch (err) {
-        this.error = err instanceof Error ? err.message : String(err);
+        this.fail("transfers.sendPath", err);
         return null;
       }
     },
@@ -128,7 +144,7 @@ export const useTransferStore = defineStore("transfers", {
         this.error = "";
         return results;
       } catch (err) {
-        this.error = err instanceof Error ? err.message : String(err);
+        this.fail("transfers.sendPaths", err);
         return [];
       }
     },
@@ -142,7 +158,7 @@ export const useTransferStore = defineStore("transfers", {
         await acceptFile(transferId);
         this.error = "";
       } catch (err) {
-        this.error = err instanceof Error ? err.message : String(err);
+        this.fail("transfers.accept", err);
       }
     },
     /** 拒绝接收（F34）。 */
@@ -151,7 +167,7 @@ export const useTransferStore = defineStore("transfers", {
         await rejectFile(transferId);
         this.error = "";
       } catch (err) {
-        this.error = err instanceof Error ? err.message : String(err);
+        this.fail("transfers.reject", err);
       }
     },
     /** 取消传输（F33）。 */
@@ -160,7 +176,7 @@ export const useTransferStore = defineStore("transfers", {
         await cancelTransfer(transferId);
         this.error = "";
       } catch (err) {
-        this.error = err instanceof Error ? err.message : String(err);
+        this.fail("transfers.cancel", err);
       }
     },
     /** 重试失败的发送任务（M3-b）；成功则登记新的任务快照。 */
@@ -171,7 +187,7 @@ export const useTransferStore = defineStore("transfers", {
         this.error = "";
         return info;
       } catch (err) {
-        this.error = err instanceof Error ? err.message : String(err);
+        this.fail("transfers.retry", err);
         return null;
       }
     },
@@ -222,6 +238,8 @@ export const useTransferStore = defineStore("transfers", {
       fallbackKey: "transfer.openFailed" | "transfer.saveFailed",
     ) {
       const raw = err instanceof Error ? err.message : String(err);
+      // 原始信息入日志，界面只给友好文案（v3 / R8.6）。
+      void reportUnknownError("transfers.fileAction", err);
       this.error = raw;
       const missing =
         raw.includes("file unavailable") ||
@@ -309,6 +327,19 @@ export const useTransferStore = defineStore("transfers", {
       this.started = false;
       this.error = "";
       this.folderRejected = 0;
+    },
+    /**
+     * 清空本地缓存的任务与预览（v3）。
+     *
+     * 保持事件订阅状态，用于设置页「清空全部历史」后让对话页立即变空。
+     */
+    resetAll() {
+      this.items = [];
+      this.previews = {};
+      this.previewErrors = {};
+      this.sessionIds = {};
+      this.folderRejected = 0;
+      this.error = "";
     },
   },
 });

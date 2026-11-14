@@ -4,6 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   DeviceEntry,
   DeviceUpdate,
+  ErrorLogInfo,
   History,
   HistoryPage,
   IncomingMessage,
@@ -166,6 +167,21 @@ export function pickDownloadDir(): Promise<string | null> {
 /** 打开下载目录（v3，桌面端；Android 会返回错误）。 */
 export function openDownloadDir(): Promise<void> {
   return invoke<void>("open_download_dir");
+}
+
+/** 上报一条错误到本地日志（v3）；返回日志位置。 */
+export function reportError(scope: string, message: string): Promise<ErrorLogInfo> {
+  return invoke<ErrorLogInfo>("report_error", { scope, message });
+}
+
+/** 读取错误日志位置与是否已有日志（v3）。 */
+export function getErrorLog(): Promise<ErrorLogInfo> {
+  return invoke<ErrorLogInfo>("get_error_log");
+}
+
+/** 打开错误日志目录（v3，桌面端；Android 会返回错误）。 */
+export function openErrorLogDir(): Promise<void> {
+  return invoke<void>("open_error_log_dir");
 }
 
 /** 是否开启开机自启（F50）。 */

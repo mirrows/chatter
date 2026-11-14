@@ -11,6 +11,11 @@ import {
   setAutostart,
 } from "../api/tauri";
 import type { Settings } from "../api/types";
+import { t } from "../i18n";
+import { handleError } from "../utils/errors";
+import { useChatStore } from "./chat";
+import { message } from "./message";
+import { useTransferStore } from "./transfers";
 
 /** 默认设置（未加载前的占位值）。 */
 const EMPTY_SETTINGS: Settings = {
@@ -22,7 +27,19 @@ const EMPTY_SETTINGS: Settings = {
   theme: "light",
   autoAcceptImages: true,
   autoAcceptFiles: false,
+  autoCleanEnabled: false,
+  autoCleanDays: 7,
 };
+
+/** 定时清理保留天数上限（防止误输入超大值）。 */
+const MAX_CLEAN_DAYS = 3650;
+
+/** 把天数规范成「大于 0 的整数」（v3：纯数字、不支持小数）。 */
+export function normalizeCleanDays(value: unknown): number {
+  const raw = Math.floor(Number(value));
+  if (!Number.isFinite(raw) || raw < 1) return 7;
+  return Math.min(MAX_CLEAN_DAYS, raw);
+}
 
 /** 设置 store。 */
 export const useSettingsStore = defineStore("settings", {
@@ -54,7 +71,7 @@ export const useSettingsStore = defineStore("settings", {
         this.loaded = true;
         this.error = "";
       } catch (err) {
-        this.error = err instanceof Error ? err.message : String(err);
+        this.error = handleError("settings.load", err);
       }
     },
     /** 保存设置；返回是否需要重启。 */
@@ -62,13 +79,15 @@ export const useSettingsStore = defineStore("settings", {
       this.saving = true;
       this.notice = "";
       try {
+        // 天数必须是大于 0 的整数（v3），后端也会再校验一次。
+        this.settings.autoCleanDays = normalizeCleanDays(this.settings.autoCleanDays);
         const result = await saveSettings(this.settings);
         this.restartRequired = result.restartRequired;
         this.notice = "saved";
         this.error = "";
         return result.restartRequired;
       } catch (err) {
-        this.error = err instanceof Error ? err.message : String(err);
+        this.error = handleError("settings.save", err);
         return false;
       } finally {
         this.saving = false;
@@ -94,7 +113,7 @@ export const useSettingsStore = defineStore("settings", {
         this.error = "";
         return true;
       } catch (err) {
-        this.error = err instanceof Error ? err.message : String(err);
+        this.error = handleError("settings.renameLocal", err);
         return false;
       }
     },
@@ -105,7 +124,7 @@ export const useSettingsStore = defineStore("settings", {
         this.autostart = enabled;
         this.error = "";
       } catch (err) {
-        this.error = err instanceof Error ? err.message : String(err);
+        this.error = handleError("settings.autostart", err);
       }
     },
     /** 打开下载目录（v3）：失败写入 error 由设置页展示。 */
@@ -114,7 +133,7 @@ export const useSettingsStore = defineStore("settings", {
         await openDownloadDirApi();
         this.error = "";
       } catch (err) {
-        this.error = err instanceof Error ? err.message : String(err);
+        this.error = handleError("settings.openDownloadDir", err);
       }
     },
     /**
@@ -129,7 +148,7 @@ export const useSettingsStore = defineStore("settings", {
         this.settings.downloadDir = picked;
         await this.save();
       } catch (err) {
-        this.error = err instanceof Error ? err.message : String(err);
+        this.error = handleError("settings.pickDownloadDir", err);
       }
     },
     /** 清空全部历史（F40/F41），可选择同时删除已接收文件。 */
@@ -137,10 +156,18 @@ export const useSettingsStore = defineStore("settings", {
       try {
         const removed = await clearHistory(undefined, this.deleteFiles);
         this.lastRemovedFiles = removed;
-        this.notice = "historyCleared";
+        // 同时清空前端缓存：否则返回对话页仍能看到旧记录（v3 真机问题）。
+        useChatStore().resetAll();
+        useTransferStore().resetAll();
         this.error = "";
+        // 结果改用轻提示（R8.1），不再占用设置页常驻文案。
+        message.success(
+          removed > 0
+            ? t("settings.historyClearedWithFiles", { count: removed })
+            : t("settings.historyCleared"),
+        );
       } catch (err) {
-        this.error = err instanceof Error ? err.message : String(err);
+        this.error = handleError("settings.clearHistory", err);
       }
     },
     /** 应用主题到根元素（light/dark 由 CSS 变量切换）。 */

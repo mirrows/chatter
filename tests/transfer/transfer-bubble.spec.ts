@@ -155,6 +155,38 @@ describe("TransferBubble", () => {
     await wrapper.get('[data-testid="transfer-box"]').trigger("click");
     expect(wrapper.emitted("open")).toBeUndefined();
   });
+
+  it("失败/拒绝：发送方可点开源文件，接收方不可点（v3）", async () => {
+    const senderFailed = mount(TransferBubble, {
+      props: { transfer: transfer({ direction: "send", kind: "file", state: "failed" }) },
+    });
+    await senderFailed.get('[data-testid="transfer-box"]').trigger("click");
+    expect(senderFailed.emitted("open")).toEqual([[]]);
+
+    const senderRejected = mount(TransferBubble, {
+      props: { transfer: transfer({ direction: "send", kind: "file", state: "rejected" }) },
+    });
+    await senderRejected.get('[data-testid="transfer-box"]').trigger("click");
+    expect(senderRejected.emitted("open")).toEqual([[]]);
+
+    const receiverFailed = mount(TransferBubble, {
+      props: { transfer: transfer({ direction: "receive", kind: "file", state: "failed" }) },
+    });
+    await receiverFailed.get('[data-testid="transfer-box"]').trigger("click");
+    expect(receiverFailed.emitted("open")).toBeUndefined();
+    // 不可点的气泡加 static 类，去掉 hover 反馈
+    expect(receiverFailed.get('[data-testid="transfer-box"]').classes()).toContain("static");
+  });
+
+  it("hideRetry 时失败任务不再显示重试（重启后，v3）", () => {
+    const wrapper = mount(TransferBubble, {
+      props: {
+        transfer: transfer({ direction: "send", state: "failed" }),
+        hideRetry: true,
+      },
+    });
+    expect(wrapper.find('[data-testid="transfer-retry"]').exists()).toBe(false);
+  });
 });
 it("touchOnly（移动端）时右键不触发菜单，只走长按（v3）", async () => {
   const wrapper = mount(TransferBubble, {

@@ -162,7 +162,8 @@ describe("transfer store", () => {
     const store = useTransferStore();
 
     await expect(store.pickAndSend("peer-1", false)).resolves.toBeNull();
-    expect(store.error).toBe("peer not found");
+    // 未知（英文）错误统一友好兜底（v3 / R8.6）
+    expect(store.error).toBe("操作失败，请稍后重试");
     expect(store.items).toHaveLength(0);
   });
 
@@ -207,6 +208,28 @@ describe("transfer store", () => {
     expect(store.error).toBe("permission denied");
   });
 
+  it("isSessionTask 只标记本次运行内的任务（v3：重启后隐藏重试）", () => {
+    const store = useTransferStore();
+    // 历史记录直接入队（不经过 upsert）→ 不算本次运行任务
+    store.ingestHistory({
+      transferId: "hist-1",
+      peerId: "peer-1",
+      direction: "send",
+      kind: "file",
+      filename: "old.bin",
+      size: 10,
+      transferred: 0,
+      state: "failed",
+      path: null,
+      sourcePath: null,
+      ts: 1,
+    });
+    expect(store.isSessionTask("hist-1")).toBe(false);
+
+    store.upsert(transfer({ transferId: "live-1", direction: "send", state: "offered" }));
+    expect(store.isSessionTask("live-1")).toBe(true);
+  });
+
   it("accept/reject/cancel 调用对应命令", async () => {
     api.acceptFile.mockResolvedValue(undefined);
     api.rejectFile.mockResolvedValue(undefined);
@@ -226,7 +249,7 @@ describe("transfer store", () => {
     api.acceptFile.mockRejectedValue(new Error("invalid transfer state"));
     const store = useTransferStore();
     await store.accept("t-1");
-    expect(store.error).toBe("invalid transfer state");
+    expect(store.error).toBe("操作失败，请稍后重试");
   });
 
   it("retry 成功后登记新任务，失败时记录错误", async () => {
@@ -241,7 +264,7 @@ describe("transfer store", () => {
 
     api.retryTransfer.mockRejectedValue(new Error("missing source path"));
     await expect(store.retry("t-1")).resolves.toBeNull();
-    expect(store.error).toBe("missing source path");
+    expect(store.error).toBe("操作失败，请稍后重试");
   });
 
   it("sendPaths 汇总拖拽结果：成功的登记任务，目录计入提示（F22/F31）", async () => {

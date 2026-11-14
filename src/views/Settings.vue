@@ -44,6 +44,29 @@
       </div>
     </div>
 
+    <!-- 错误日志（v3）：日志目录里有内容才显示；桌面端点击打开文件夹，移动端展示路径 -->
+    <div v-if="errorLog.info.hasLogs" class="field" data-testid="settings-error-log">
+      <span>{{ t("error.logHint") }}</span>
+      <div class="field-row">
+        <input
+          v-if="isAndroid"
+          :value="errorLog.info.dir"
+          readonly
+          class="readonly locked"
+          data-testid="settings-error-log-path"
+        />
+        <button
+          v-else
+          type="button"
+          class="secondary"
+          data-testid="settings-error-log-open"
+          @click="openErrorLogDir"
+        >
+          {{ t("error.logOpen") }}
+        </button>
+      </div>
+    </div>
+
     <div class="row">
       <label class="field">
         <span>{{ t("settings.discoveryPort") }}</span>
@@ -92,6 +115,37 @@
       />
       {{ t("settings.autoFiles") }}
     </label>
+
+    <!-- 定时清理（v3，仅移动端）：默认关闭，开启后每次启动清理超期接收文件 -->
+    <div v-if="isAndroid" class="field" data-testid="settings-auto-clean">
+      <span>{{ t("settings.autoClean") }}</span>
+      <div class="field-row">
+        <label class="check inline">
+          <input
+            v-model="store.settings.autoCleanEnabled"
+            type="checkbox"
+            data-testid="settings-auto-clean-toggle"
+          />
+          {{ t("settings.autoCleanLabel") }}
+        </label>
+        <input
+          v-model.number="store.settings.autoCleanDays"
+          type="number"
+          class="days"
+          min="1"
+          step="1"
+          inputmode="numeric"
+          data-testid="settings-auto-clean-days"
+          :disabled="!store.settings.autoCleanEnabled"
+          @input="onCleanDaysInput"
+          @blur="onCleanDaysInput"
+        />
+        <span class="unit">{{ t("settings.autoCleanUnit") }}</span>
+      </div>
+      <p class="hint" data-testid="settings-auto-clean-hint">
+        {{ t("settings.autoCleanHint") }}
+      </p>
+    </div>
     <label class="check">
       <input
         :checked="store.autostart"
@@ -115,13 +169,6 @@
         {{ t("settings.clearHistory") }}
       </button>
     </div>
-    <p v-if="store.notice === 'historyCleared'" class="ok" data-testid="settings-history-cleared">
-      {{
-        store.lastRemovedFiles > 0
-          ? t("settings.historyClearedWithFiles", { count: store.lastRemovedFiles })
-          : t("settings.historyCleared")
-      }}
-    </p>
   </section>
 </template>
 
@@ -130,15 +177,19 @@ import { onMounted, watch } from "vue";
 import { usePlatform } from "../composables/usePlatform";
 import { t } from "../i18n";
 import { confirmDialog } from "../stores/confirm";
+import { useErrorLogStore } from "../stores/errorLog";
 import { message } from "../stores/message";
-import { useSettingsStore } from "../stores/settings";
+import { normalizeCleanDays, useSettingsStore } from "../stores/settings";
 
 const store = useSettingsStore();
+const errorLog = useErrorLogStore();
 const { isAndroid } = usePlatform();
 
 onMounted(async () => {
   await store.load();
   store.applyTheme();
+  // 错误日志入口只在目录里已有日志时显示（v3）。
+  void errorLog.refresh();
 });
 
 /** 打开下载目录（v3）：桌面端在文件管理器中打开。 */
@@ -154,6 +205,22 @@ async function pickDownloadDir() {
     return;
   }
   await store.pickDownloadDir();
+}
+
+/** 打开错误日志目录（桌面端）；失败给轻提示。 */
+async function openErrorLogDir() {
+  const ok = await errorLog.openDir();
+  if (!ok) message.error(t("error.logOpenFailed"));
+}
+
+/**
+ * 定时清理天数输入净化（v3）：只允许大于 0 的整数。
+ *
+ * 输入为空/0/小数时立即纠正（小数向下取整，非法值回退 7 天），
+ * 避免把非法值提交到后端（后端也会拒绝 0）。
+ */
+function onCleanDaysInput() {
+  store.settings.autoCleanDays = normalizeCleanDays(store.settings.autoCleanDays);
 }
 
 /**
@@ -258,6 +325,21 @@ input:disabled {
   align-items: center;
   gap: 6px;
   font-size: 14px;
+}
+/* 定时清理（v3）：勾选框 + 天数 + 单位同一行 */
+.check.inline {
+  flex: 0 0 auto;
+}
+.field-row input.days {
+  flex: 0 0 64px;
+  width: 64px;
+  padding: 6px 8px;
+  text-align: center;
+}
+.field-row .unit {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: var(--muted);
 }
 .actions {
   display: flex;

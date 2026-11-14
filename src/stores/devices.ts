@@ -9,6 +9,7 @@ import {
   refreshDevices,
 } from "../api/tauri";
 import type { DeviceEntry, DeviceUpdate, LocalDevice } from "../api/types";
+import { handleError } from "../utils/errors";
 
 /** 主动重新发现后，等待对端单播应答的时长（毫秒）。 */
 const REFRESH_SETTLE_MS = 200;
@@ -99,7 +100,7 @@ export const useDeviceStore = defineStore("devices", {
         this.error = "";
         return true;
       } catch (err) {
-        this.error = err instanceof Error ? err.message : String(err);
+        this.error = handleError("devices.addByIp", err);
         return false;
       }
     },
@@ -118,7 +119,7 @@ export const useDeviceStore = defineStore("devices", {
         this.devices = await listDevices();
         this.error = "";
       } catch (err) {
-        this.error = err instanceof Error ? err.message : String(err);
+        this.error = handleError("devices.refresh", err);
       }
     },
     /**
@@ -137,7 +138,7 @@ export const useDeviceStore = defineStore("devices", {
         this.error = "";
       } catch (err) {
         this.started = false;
-        this.error = err instanceof Error ? err.message : String(err);
+        this.error = handleError("devices.init", err);
       }
     },
   },

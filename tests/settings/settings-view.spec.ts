@@ -11,6 +11,9 @@ const api = vi.hoisted(() => ({
   clearHistory: vi.fn(),
   openDownloadDir: vi.fn(),
   pickDownloadDir: vi.fn(),
+  getErrorLog: vi.fn(),
+  reportError: vi.fn(),
+  openErrorLogDir: vi.fn(),
   isTauri: vi.fn(),
 }));
 
@@ -22,6 +25,9 @@ vi.mock("../../src/api/tauri", () => ({
   clearHistory: api.clearHistory,
   openDownloadDir: api.openDownloadDir,
   pickDownloadDir: api.pickDownloadDir,
+  getErrorLog: api.getErrorLog,
+  reportError: api.reportError,
+  openErrorLogDir: api.openErrorLogDir,
   isTauri: api.isTauri,
 }));
 
@@ -30,6 +36,7 @@ import Settings from "../../src/views/Settings.vue";
 import { useConfirmStore } from "../../src/stores/confirm";
 import { useDeviceStore } from "../../src/stores/devices";
 import { useMessageStore } from "../../src/stores/message";
+import { useSettingsStore } from "../../src/stores/settings";
 
 const settings = {
   deviceId: "self-1",
@@ -40,6 +47,8 @@ const settings = {
   theme: "light",
   autoAcceptImages: true,
   autoAcceptFiles: false,
+  autoCleanEnabled: false,
+  autoCleanDays: 7,
 };
 
 describe("Settings view", () => {
@@ -49,6 +58,11 @@ describe("Settings view", () => {
     api.isTauri.mockReturnValue(true);
     api.getSettings.mockResolvedValue({ ...settings });
     api.getAutostart.mockResolvedValue(false);
+    api.getErrorLog.mockResolvedValue({
+      dir: "C:/logs",
+      file: "C:/logs/2026-11-14/errors.log",
+      hasLogs: false,
+    });
   });
 
   it("加载后渲染设置字段（设备 ID 只读）", async () => {
@@ -122,7 +136,8 @@ describe("Settings view", () => {
     await flushPromises();
 
     expect(api.clearHistory).toHaveBeenCalledWith(undefined, false);
-    expect(wrapper.find('[data-testid="settings-history-cleared"]').exists()).toBe(true);
+    // 结果改用 message 轻提示（v3 / R8.1）
+    expect(useMessageStore().visible.map((item) => item.text)).toContain("历史已清空");
   });
 
   it("勾选删除文件时弹窗文案变化，确认后带标记并显示数量（F41）", async () => {
@@ -141,7 +156,9 @@ describe("Settings view", () => {
     await flushPromises();
 
     expect(api.clearHistory).toHaveBeenCalledWith(undefined, true);
-    expect(wrapper.get('[data-testid="settings-history-cleared"]').text()).toContain("2");
+    expect(useMessageStore().visible.map((item) => item.text)).toContain(
+      "历史已清空，并删除 2 个文件",
+    );
   });
 
   it("取消弹窗不会清空历史（v3 需求 7）", async () => {
@@ -263,5 +280,125 @@ describe("Settings view", () => {
     await flushPromises();
 
     expect(wrapper.get('[data-testid="settings-error"]').text()).toBe("昵称不能为空");
+  });
+
+  it("错误日志：目录里没有日志时不显示入口（v3）", async () => {
+    const wrapper = mount(Settings);
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="settings-error-log"]').exists()).toBe(false);
+  });
+
+  it("错误日志：有日志时桌面端显示按钮并可打开文件夹（v3）", async () => {
+    api.getErrorLog.mockResolvedValue({
+      dir: "C:/logs",
+      file: "C:/logs/2026-11-14/errors.log",
+      hasLogs: true,
+    });
+    api.openErrorLogDir.mockResolvedValue(undefined);
+    const wrapper = mount(Settings);
+    await flushPromises();
+
+    await wrapper.get('[data-testid="settings-error-log-open"]').trigger("click");
+    await flushPromises();
+    expect(api.openErrorLogDir).toHaveBeenCalledTimes(1);
+    // 桌面端不展示路径文本框
+    expect(wrapper.find('[data-testid="settings-error-log-path"]').exists()).toBe(false);
+  });
+
+  it("错误日志：移动端用文本框展示存放位置（v3）", async () => {
+    useDeviceStore().local = {
+      deviceId: "self",
+      name: "phone",
+      discoveryPort: 28100,
+      tcpPort: 28101,
+      fingerprint: "1111-2222-3333-4444",
+      platform: "android",
+    };
+    api.getErrorLog.mockResolvedValue({
+      dir: "/data/user/0/com.chatters.app/files/logs",
+      file: "/data/user/0/com.chatters.app/files/logs/2026-11-14/errors.log",
+      hasLogs: true,
+    });
+    const wrapper = mount(Settings);
+    await flushPromises();
+
+    const input = wrapper.get('[data-testid="settings-error-log-path"]');
+    expect((input.element as HTMLInputElement).value).toBe(
+      "/data/user/0/com.chatters.app/files/logs",
+    );
+    expect(wrapper.find('[data-testid="settings-error-log-open"]').exists()).toBe(false);
+  });
+
+  it("定时清理：桌面端不显示（v3 仅移动端）", async () => {
+    const wrapper = mount(Settings);
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="settings-auto-clean"]').exists()).toBe(false);
+  });
+
+  it("定时清理：移动端显示勾选框、默认 7 天与提示语（v3）", async () => {
+    useDeviceStore().local = {
+      deviceId: "self",
+      name: "phone",
+      discoveryPort: 28100,
+      tcpPort: 28101,
+      fingerprint: "1111-2222-3333-4444",
+      platform: "android",
+    };
+    const store = useSettingsStore();
+    const wrapper = mount(Settings);
+    await flushPromises();
+
+    // 默认不勾选
+    const toggle = wrapper.get('[data-testid="settings-auto-clean-toggle"]');
+    expect((toggle.element as HTMLInputElement).checked).toBe(false);
+
+    const days = wrapper.get('[data-testid="settings-auto-clean-days"]');
+    expect((days.element as HTMLInputElement).value).toBe("7");
+    // 未勾选时天数不可编辑
+    expect((days.element as HTMLInputElement).disabled).toBe(true);
+
+    expect(wrapper.get('[data-testid="settings-auto-clean-hint"]').text()).toContain(
+      "请及时用「另存为」备份重要文件",
+    );
+
+    // 勾选后可编辑并随保存提交
+    await toggle.setValue(true);
+    expect(store.settings.autoCleanEnabled).toBe(true);
+    expect((days.element as HTMLInputElement).disabled).toBe(false);
+
+    api.saveSettings.mockResolvedValue({ restartRequired: false });
+    await wrapper.get('[data-testid="settings-save"]').trigger("click");
+    await flushPromises();
+    expect(api.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ autoCleanEnabled: true, autoCleanDays: 7 }),
+    );
+  });
+
+  it("定时清理：天数只接受大于 0 的整数（v3）", async () => {
+    useDeviceStore().local = {
+      deviceId: "self",
+      name: "phone",
+      discoveryPort: 28100,
+      tcpPort: 28101,
+      fingerprint: "1111-2222-3333-4444",
+      platform: "android",
+    };
+    const store = useSettingsStore();
+    const wrapper = mount(Settings);
+    await flushPromises();
+    await wrapper.get('[data-testid="settings-auto-clean-toggle"]').setValue(true);
+
+    const days = wrapper.get('[data-testid="settings-auto-clean-days"]');
+    // 小数被向下取整
+    await days.setValue("3.7");
+    expect(store.settings.autoCleanDays).toBe(3);
+
+    // 0 与空值回退默认 7 天
+    await days.setValue("0");
+    expect(store.settings.autoCleanDays).toBe(7);
+    await days.setValue("");
+    expect(store.settings.autoCleanDays).toBe(7);
   });
 });

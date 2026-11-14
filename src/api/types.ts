@@ -124,12 +124,26 @@ export interface Settings {
   autoAcceptImages: boolean;
   /** 自动接收普通文件。 */
   autoAcceptFiles: boolean;
+  /** 是否开启定时清理（v3，移动端；默认关闭）。 */
+  autoCleanEnabled: boolean;
+  /** 定时清理保留天数（v3，默认 7，必须大于 0）。 */
+  autoCleanDays: number;
 }
 
 /** 保存设置结果（与 Rust SaveSettingsResult 对应）。 */
 export interface SaveSettingsResult {
   /** 昵称/端口变更后需重启生效。 */
   restartRequired: boolean;
+}
+
+/** 错误日志位置（与 Rust `ErrorLogInfo` 对应，v3）。 */
+export interface ErrorLogInfo {
+  /** 日志根目录（按天建子目录）。 */
+  dir: string;
+  /** 今天的日志文件路径。 */
+  file: string;
+  /** 目录里是否已有日志（决定设置页是否展示入口）。 */
+  hasLogs: boolean;
 }
 
 /** 历史中的一条消息（与 Rust StoredMessage 对应）。 */

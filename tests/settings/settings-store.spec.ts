@@ -26,7 +26,27 @@ vi.mock("../../src/api/tauri", () => ({
 }));
 
 // 必须在 mock 之后导入被测模块。
-import { useSettingsStore } from "../../src/stores/settings";
+import { normalizeCleanDays, useSettingsStore } from "../../src/stores/settings";
+import { useChatStore } from "../../src/stores/chat";
+import { useMessageStore } from "../../src/stores/message";
+import { useTransferStore } from "../../src/stores/transfers";
+import type { TransferInfo } from "../../src/api/types";
+
+/** 构造一条传输任务（清空缓存用例使用）。 */
+const transfer = (overrides: Partial<TransferInfo> = {}): TransferInfo => ({
+  transferId: "t-1",
+  peerId: "peer-1",
+  direction: "receive",
+  kind: "image",
+  filename: "photo.png",
+  size: 100,
+  transferred: 100,
+  state: "done",
+  path: null,
+  error: null,
+  ts: 1,
+  ...overrides,
+});
 
 const settings: Settings = {
   deviceId: "self-1",
@@ -37,6 +57,8 @@ const settings: Settings = {
   theme: "dark",
   autoAcceptImages: true,
   autoAcceptFiles: false,
+  autoCleanEnabled: false,
+  autoCleanDays: 7,
 };
 
 describe("settings store", () => {
@@ -86,6 +108,33 @@ describe("settings store", () => {
     expect(store.error).toBe("昵称不能为空");
   });
 
+  it("save 会把定时清理天数规范成大于 0 的整数（v3）", async () => {
+    api.saveSettings.mockResolvedValue({ restartRequired: false });
+    const store = useSettingsStore();
+
+    store.settings.autoCleanEnabled = true;
+    store.settings.autoCleanDays = 3.7;
+    await store.save();
+    expect(store.settings.autoCleanDays).toBe(3);
+    expect(api.saveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ autoCleanEnabled: true, autoCleanDays: 3 }),
+    );
+
+    store.settings.autoCleanDays = 0;
+    await store.save();
+    expect(store.settings.autoCleanDays).toBe(7);
+  });
+
+  it("normalizeCleanDays 只接受大于 0 的整数", () => {
+    expect(normalizeCleanDays(7)).toBe(7);
+    expect(normalizeCleanDays("30")).toBe(30);
+    expect(normalizeCleanDays(3.9)).toBe(3);
+    expect(normalizeCleanDays(0)).toBe(7);
+    expect(normalizeCleanDays(-2)).toBe(7);
+    expect(normalizeCleanDays("abc")).toBe(7);
+    expect(normalizeCleanDays(99999)).toBe(3650);
+  });
+
   it("renameLocal 未加载时先拉取设置再保存昵称（v3）", async () => {
     api.getSettings.mockResolvedValue({ ...settings });
     api.saveSettings.mockResolvedValue({ restartRequired: true });
@@ -127,17 +176,32 @@ describe("settings store", () => {
 
     api.setAutostart.mockRejectedValue(new Error("denied"));
     await store.toggleAutostart(false);
-    expect(store.error).toBe("denied");
+    // 未知（英文）错误统一友好兜底（v3 / R8.6）
+    expect(store.error).toBe("操作失败，请稍后重试");
   });
 
-  it("clearAllHistory 调用清空命令并给出提示", async () => {
+  it("clearAllHistory 调用清空命令，用轻提示说明结果并清空本地缓存（v3）", async () => {
     api.clearHistory.mockResolvedValue(3);
     const store = useSettingsStore();
     store.deleteFiles = true;
+    // 预置本地缓存，验证清空后立即失效（不必重启）
+    useChatStore().messages = [
+      { id: "m-1", peerId: "peer-1", direction: "in", text: "hi", ts: 1, status: "delivered" },
+    ];
+    useTransferStore().upsert(transfer({ transferId: "t-1", state: "done" }));
+
     await store.clearAllHistory();
+
     expect(api.clearHistory).toHaveBeenCalledWith(undefined, true);
     expect(store.lastRemovedFiles).toBe(3);
-    expect(store.notice).toBe("historyCleared");
+    // 结果走 message 组件（R8.1），不再写入设置页常驻 notice
+    expect(useMessageStore().visible.map((item) => item.text)).toContain(
+      "历史已清空，并删除 3 个文件",
+    );
+    expect(store.notice).toBe("");
+    // 本地缓存同步清空
+    expect(useChatStore().messages).toHaveLength(0);
+    expect(useTransferStore().items).toHaveLength(0);
   });
 
   it("applyTheme 写入根元素 data-theme", () => {

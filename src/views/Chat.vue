@@ -26,20 +26,14 @@
     </header>
 
     <div class="body">
-      <!-- 提示浮层：绝对定位在对话区上方，下滑出现，可手动关闭 -->
-      <transition name="slide-down">
-        <div
-          v-if="notice"
-          :key="notice.key"
-          class="notice-layer"
-          :data-testid="`chat-notice-${notice.key}`"
-        >
-          <span class="notice-text">{{ notice.text }}</span>
-          <button class="notice-close" data-testid="chat-notice-close" @click="dismissNotice">
-            ×
-          </button>
-        </div>
-      </transition>
+      <!-- 通用提示条（v3）：错误/传输/粘贴/文件夹提示统一走 NoticeBar 组件 -->
+      <NoticeBar
+        :key="notice?.key ?? 'none'"
+        :text="notice?.text ?? ''"
+        :testid="notice ? `chat-notice-${notice.key}` : undefined"
+        :closable="true"
+        @close="dismissNotice"
+      />
 
       <p v-if="timeline.length === 0" class="empty" data-testid="chat-empty">
         {{ t("chat.empty") }}
@@ -76,6 +70,7 @@
             :preview-url="transfers.previews[entry.transfer.transferId]"
             :preview-error="transfers.previewErrors[entry.transfer.transferId]"
             :touch-only="isAndroid"
+            :hide-retry="!transfers.isSessionTask(entry.transfer.transferId)"
             @accept="transfers.accept"
             @reject="transfers.reject"
             @cancel="transfers.cancel"
@@ -168,11 +163,14 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import MessageBubble from "../components/MessageBubble.vue";
+import NoticeBar from "../components/NoticeBar.vue";
 import TransferBubble from "../components/TransferBubble.vue";
 import { clearHistory, getHistoryPage, isTauri, saveClipboardImage } from "../api/tauri";
 import type { TransferInfo } from "../api/types";
 import { t } from "../i18n";
+import { confirmDialog } from "../stores/confirm";
 import { copyText } from "../utils/clipboard";
+import { friendlyError, reportUnknownError } from "../utils/errors";
 import { imageFileFromItems, readFileAsBase64 } from "../utils/paste";
 import { useChatStore, type ChatMessage } from "../stores/chat";
 import { useContextMenuStore, type ContextMenuAction } from "../stores/contextMenu";
@@ -200,7 +198,6 @@ const imagePreview = useImagePreviewStore();
 const { isAndroid } = usePlatform();
 const draft = ref("");
 const pasteError = ref("");
-const cleared = ref(false);
 let unlistenDrop: UnlistenFn | null = null;
 
 /** 输入框占位文案：移动端没有 Ctrl+Enter，去掉快捷键提示。 */
@@ -242,22 +239,29 @@ const timeline = computed<TimelineEntry[]>(() => {
   return entries.sort((a, b) => a.ts - b.ts || a.key.localeCompare(b.key));
 });
 
-/** 当前需要展示的提示（同一时刻只显示一条，关闭后自动展示下一条）。 */
+/**
+ * 当前需要展示的提示（同一时刻只显示一条，关闭后自动展示下一条）。
+ *
+ * v3：未知错误统一走友好兜底文案，不把错误码/英文技术细节展示给用户。
+ */
 const notice = computed(() => {
-  if (error.value) return { key: "error" as const, text: t("chat.error", { reason: error.value }) };
+  if (error.value)
+    return { key: "error" as const, text: t("chat.error", { reason: friendlyError(error.value) }) };
   if (transfers.error)
     return {
       key: "transfer" as const,
-      text: t("chat.transferFailed", { reason: transfers.error }),
+      text: t("chat.transferFailed", { reason: friendlyError(transfers.error) }),
     };
   if (pasteError.value)
-    return { key: "paste" as const, text: t("chat.pasteFailed", { reason: pasteError.value }) };
+    return {
+      key: "paste" as const,
+      text: t("chat.pasteFailed", { reason: friendlyError(pasteError.value) }),
+    };
   if (transfers.folderRejected > 0)
     return {
       key: "folder" as const,
       text: t("chat.folderNotSupported", { count: transfers.folderRejected }),
     };
-  if (cleared.value) return { key: "cleared" as const, text: t("chat.cleared") };
   return null;
 });
 
@@ -275,9 +279,6 @@ function dismissNotice() {
       break;
     case "folder":
       transfers.clearFolderNotice();
-      break;
-    case "cleared":
-      cleared.value = false;
       break;
   }
 }
@@ -556,6 +557,14 @@ async function onPaste(event: ClipboardEvent) {
  * 复位后不会再去请求更早的数据，避免清空后又把旧记录翻回来。
  */
 async function clearConversation() {
+  // 二次确认：清空后不可恢复，统一用通用确认弹窗（v3）。
+  const confirmed = await confirmDialog({
+    title: t("chat.clearHistory"),
+    message: t("chat.clearHistoryConfirm"),
+    danger: true,
+    confirmText: t("common.ok"),
+  });
+  if (!confirmed) return;
   try {
     await clearHistory(props.peerId);
     store.clearPeer(props.peerId);
@@ -566,9 +575,11 @@ async function clearConversation() {
     dividerKey.value = null;
     atBottom.value = true;
     initialScrollDone = false;
-    cleared.value = true;
+    // 结果用轻提示（R8.1），不再占用对话区浮层。
+    toast.success(t("chat.cleared"));
   } catch (err) {
-    store.error = err instanceof Error ? err.message : String(err);
+    store.error = friendlyError(err);
+    void reportUnknownError("chat.clearHistory", err);
   }
 }
 
@@ -710,55 +721,6 @@ h2 {
   flex: 1;
   height: 1px;
   background: var(--bg);
-}
-/* 提示浮层：绝对定位在对话上方，下滑出现，不占据文档流（需求 2）。 */
-.notice-layer {
-  position: absolute;
-  left: 4px;
-  right: 4px;
-  top: 0;
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: #fff4ed;
-  border: 1px solid #fdba74;
-  color: #9a3412;
-  font-size: 13px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.1);
-}
-.notice-text {
-  flex: 1;
-  word-break: break-word;
-}
-.notice-close {
-  flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  color: inherit;
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-}
-.notice-close:hover {
-  background: rgba(0, 0, 0, 0.06);
-}
-.slide-down-enter-active,
-.slide-down-leave-active {
-  transition:
-    transform 0.18s ease,
-    opacity 0.18s ease;
-}
-.slide-down-enter-from,
-.slide-down-leave-to {
-  transform: translateY(-12px);
-  opacity: 0;
 }
 .empty {
   color: var(--muted);

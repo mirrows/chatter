@@ -22,6 +22,7 @@
 
     <div
       class="box"
+      :class="{ static: !isClickable }"
       data-testid="transfer-box"
       :title="boxTitle"
       @contextmenu.prevent="openMenu"
@@ -112,6 +113,8 @@ const props = defineProps<{
   previewError?: string;
   /** 移动端：只用长按呼出菜单，忽略 contextmenu（否则会先闪一个鼠标位置菜单）。 */
   touchOnly?: boolean;
+  /** 失败任务是否隐藏重试：历史加载的失败任务重启后不再可重试（v3）。 */
+  hideRetry?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -136,7 +139,10 @@ const percent = computed(() => {
 /** 进度条只在传输中显示，完成后隐藏（需求 5）。 */
 const showProgress = computed(() => props.transfer.state === "transferring");
 const waitingAccept = computed(() => isSend.value && props.transfer.state === "offered");
-const showRetry = computed(() => isSend.value && props.transfer.state === "failed");
+/** 失败任务只有本次运行内发起的才显示重试（v3：重启后隐藏）。 */
+const showRetry = computed(
+  () => isSend.value && props.transfer.state === "failed" && !props.hideRetry,
+);
 const canAccept = computed(() => !isSend.value && props.transfer.state === "pending");
 const canCancel = computed(
   () =>
@@ -144,6 +150,21 @@ const canCancel = computed(
     (props.transfer.state === "pending" || props.transfer.state === "transferring"),
 );
 const receiveActions = computed(() => canAccept.value || canCancel.value);
+
+/**
+ * 气泡是否可点击（v3）。
+ *
+ * - 已完成：两个方向都可点开（发送方打开源文件、接收方打开落盘文件）；
+ * - 已拒绝/失败/取消：**只有发送方**可以点（打开自己的源文件），接收方无本地副本，不可点。
+ */
+const isClickable = computed(() => {
+  const { state } = props.transfer;
+  if (state === "done") return true;
+  // 失败/拒绝/取消：接收方没有本地副本不可点；发送方仍可打开自己的源文件。
+  if (state === "failed" || state === "rejected" || state === "cancelled") return isSend.value;
+  // 进行中：只有已经拿到预览数据的图片可点（点开预览）。
+  return isImage.value && Boolean(props.previewUrl);
+});
 
 /** 失败/取消/拒绝才显示小角标；done 不显示任何状态文案（需求 5）。 */
 const badge = computed(() => {
@@ -185,15 +206,21 @@ function openMenu(event: MouseEvent) {
   emit("menu", { x: event.clientX, y: event.clientY, centered: false });
 }
 
-/** 点击气泡：图片打开预览；已完成的文件由上层用本地路径打开。 */
+/** 点击气泡：完成的图片打开预览；可点的文件请求上层用本地路径打开（v3）。 */
 function onBoxClick() {
   if (longPress.fired()) return;
+  if (!isClickable.value) return;
+  const { state } = props.transfer;
+  if (state === "failed" || state === "rejected" || state === "cancelled") {
+    // 发送方点开自己的源文件；找不到时由上层统一提示。
+    emit("open");
+    return;
+  }
   if (isImage.value) {
     if (props.previewUrl) emit("preview", props.previewUrl);
     return;
   }
-  // v3：发送方打开自己的源文件，接收方打开落盘文件；找不到时由上层提示。
-  if (props.transfer.state === "done") emit("open");
+  if (state === "done") emit("open");
 }
 </script>
 
@@ -230,6 +257,10 @@ function onBoxClick() {
 }
 .box:hover {
   box-shadow: 0 0 0 2px var(--accent-hover, rgba(24, 84, 168, 0.25));
+}
+/* 不可点击（接收方的失败/拒绝任务）：不显示 hover 反馈（v3） */
+.box.static:hover {
+  box-shadow: none;
 }
 .thumb {
   width: 100%;
