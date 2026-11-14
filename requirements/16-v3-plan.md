@@ -449,3 +449,16 @@ message({ type: "success" | "error" | "info", text: string, duration = 1500 }): 
   - exe：13.31 MB，SHA-256 `38F83791817F422A7D84DC2BC4668BFE74DF36E581B949B4267117B8BB9B8CA8`。
 
 
+
+### I6.10 · 验收归档与工程门禁补齐（2026-11-14）
+
+| # | 事项 | 结果 |
+|---|---|---|
+| 1 | 真机验收归档 | Windows 10/11 + Android arm64 通过：勾选 I6 的 9 项验收清单（本文 §I6）、`15` §8.4（4/6，剩余两项列入 `17`）、`15` §9.4（2/3）、`11` B 节 24 项；`11` A 节门禁数字更新为 lib 107 + 集成 22 / 前端 26 文件 226 用例 |
+| 2 | ESLint 补齐（R3.1 缺口） | 新增 `eslint.config.js`（ESLint 9 扁平配置：`typescript-eslint` + `eslint-plugin-vue` essential，忽略构建产物）；`npm run lint` **0 error**；CI `frontend` job 增加 `npm run lint`；修复 `tests/utils/long-press.spec.ts` 的 `any`（改用 `LongPressHandlers` 与 `TouchEvent` 断言） |
+| 3 | 格式统一 | Prettier 统一 `README.md` 与 3 个 `tauri*.conf.json`，`npx prettier --check .` 全绿 |
+| 4 | 文档盘点 | 新增 `17-v3-followups.md`（**唯一待办入口**：发布阻塞、功能、优化、已决不做、待决策的不一致点）；更新 `01` §3.5、`02` §8、`03` 索引、`README`（数据位置/门禁/Android 出包）、`11`、`15` |
+
+- **门禁**：`npm run test` 226、`npm run lint` 0、`vue-tsc` 0、`prettier --check .` 全绿；`cargo test` lib **107** + 集成 **22**、`clippy -D warnings` 0、`fmt` 0。
+- **提交**：`4cc80be`（后端）、`dcc859b`（前端）、`a1579fc`（lint）、`f5d53fe`（格式）、`553ae60`（文档），已推送 `origin/main`。
+
