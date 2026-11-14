@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from "pinia";
 
 const api = vi.hoisted(() => ({
   sendText: vi.fn(),
+  resendText: vi.fn(),
   onMessage: vi.fn(),
   onSessionUpdate: vi.fn(),
   isTauri: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock("../../src/api/tauri", () => ({
   SESSION_UPDATE_EVENT: "session://update",
   TRANSFER_UPDATE_EVENT: "transfer://update",
   sendText: api.sendText,
+  resendText: api.resendText,
   onMessage: api.onMessage,
   onSessionUpdate: api.onSessionUpdate,
   isTauri: api.isTauri,

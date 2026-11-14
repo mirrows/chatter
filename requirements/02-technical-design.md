@@ -226,7 +226,7 @@ src/
 |---|---|
 | `list_devices` / `add_device_by_ip(addr)` | 设备列表 / 手动按 IP 添加（M4 之后补齐，F3） |
 | `refresh_devices()` | 主动触发一次发现查询（v2/M9：切回前台或发送失败时刷新设备表） |
-| `send_text(peer_id, text)` / `resend(msg_id)` | 文字消息 / 重发（**`resend` 未实现**，前端复用 `send_text`；见 §8 说明） |
+| `send_text(peer_id, text)` / `resend_text(msg_id)` | 文字消息 / 重发（**v3 已实现**：复用原 msg_id，历史与界面保持单条；见 §8 说明） |
 | `send_file(peer_id, path)` | 图片或文件（后端按扩展名区分类型，返回任务快照） |
 | `accept_file(transfer_id)` / `reject_file(transfer_id)` | 接收确认（F34） |
 | `cancel_transfer(transfer_id)` / `retry_transfer(transfer_id)` | 终止 / 重试（重试为 M3-b 实现，按续传偏移继续） |
@@ -251,8 +251,11 @@ src/
 
 - `send_text(peer_id, text)`：后端在未建立会话时，用发现结果里的 **IP + 对端 TCP 端口** 自动建连；
   返回值 `{ msgId, status }`，`status ∈ delivered | failed`（3 秒未收到 TEXT_ACK 即 failed）。
-- 重发：M2-b 未单独提供 `resend(msg_id)` 命令，前端对失败消息复用 `send_text`（消息内容仍在界面状态中）；
-  M4 起历史已持久化，可在后续版本直接补 `resend(msg_id)` 以支持重启后重发。
+- 重发（v3）：新增 `resend_text(msg_id)`，后端按 msg_id 取原记录（仅允许 `direction = out`、非空文本），
+  用**同一个 msg_id** 重新发送并覆盖 `history.json` 中的同一条记录（`ts` 沿用原值）。
+  前端 `chat.retry()` 不再调用 `send_text`、不再替换界面 id/时间戳；接收端 `receive()` 按 msg_id 去重，
+  因此 ACK 丢失后的重发不会产生重复气泡或重复历史。`send_text` 内部改为「生成 id 后调用
+  `send_text_with_id`」，两者共用同一 ACK 逻辑。
 - `message://new` 载荷：`{ peerId, msgId, text, ts }`；`session://update` 载荷：`{ kind: "connected" | "disconnected", peerId, name? }`。
 
 补充说明（M3-a 实现口径）：

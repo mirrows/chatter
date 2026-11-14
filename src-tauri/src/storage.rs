@@ -126,6 +126,16 @@ impl HistoryStore {
             .cloned()
     }
 
+    /// 按消息 ID 查找一条消息记录（v3：`resend_text` 按原 msg_id 重发）。
+    pub async fn find_message(&self, msg_id: &str) -> Option<StoredMessage> {
+        let history = self.inner.lock().await;
+        history
+            .messages
+            .iter()
+            .find(|m| m.msg_id == msg_id)
+            .cloned()
+    }
+
     /// 读取某对端的传输记录。
     pub async fn transfers_for(&self, peer_id: Option<&str>) -> Vec<StoredTransfer> {
         let history = self.inner.lock().await;
@@ -407,6 +417,35 @@ mod tests {
         assert_eq!(found.transfer_id, "t-2");
         assert_eq!(found.state, "done");
         assert!(store.find_transfer("missing").await.is_none());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 正常路径：按 msg_id 查回消息记录（v3 重发用）。
+    #[tokio::test]
+    async fn find_message_by_id() {
+        let dir = std::env::temp_dir().join("chatters_history_find_message");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("history.json");
+        std::fs::remove_file(&path).ok();
+
+        let store = HistoryStore::open(path).await;
+        store
+            .append_message(StoredMessage {
+                msg_id: "m-1".to_string(),
+                peer_id: "peer-1".to_string(),
+                direction: "out".to_string(),
+                text: "hello".to_string(),
+                ts: 1,
+                status: "failed".to_string(),
+            })
+            .await
+            .expect("append");
+
+        let found = store.find_message("m-1").await.expect("message found");
+        assert_eq!(found.text, "hello");
+        assert_eq!(found.status, "failed");
+        assert!(store.find_message("missing").await.is_none());
 
         std::fs::remove_dir_all(&dir).ok();
     }

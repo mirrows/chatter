@@ -964,6 +964,64 @@ pub async fn send_text(
     })
 }
 
+/// 重发一条失败的文字消息（v3）：复用原 msg_id，历史只更新同一条记录。
+///
+/// 与 `send_text` 的区别：不生成新消息 ID，因此界面与 `history.json` 都保持一条，
+/// ACK 丢失后的重发也不会让对端出现重复消息。
+#[tauri::command]
+pub async fn resend_text(
+    state: tauri::State<'_, AppState>,
+    msg_id: String,
+) -> Result<TextSendResultDto, String> {
+    let stored = state
+        .history
+        .find_message(&msg_id)
+        .await
+        .ok_or_else(|| "消息不存在，无法重发".to_string())?;
+    let (peer_id, text) = resend_target(&stored)?;
+
+    let session_id = ensure_session(&state, &peer_id).await?;
+    let result = state
+        .session
+        .send_text_with_id(&session_id, &msg_id, &text)
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = match result.status {
+        SendStatus::Delivered => "delivered",
+        SendStatus::Failed => "failed",
+    };
+    // 同 msg_id 覆盖：状态 failed → delivered，时间戳沿用原记录（重启前后顺序一致）。
+    if let Err(e) = state
+        .history
+        .append_message(StoredMessage {
+            msg_id: result.msg_id.clone(),
+            peer_id: session_id,
+            direction: "out".to_string(),
+            text,
+            ts: stored.ts,
+            status: status.to_string(),
+        })
+        .await
+    {
+        log::warn!("failed to persist resent message: {e}");
+    }
+    Ok(TextSendResultDto {
+        msg_id: result.msg_id,
+        status: TextStatus::from(result.status),
+    })
+}
+
+/// 校验并取出重发所需的（对端, 文本）：只允许本机发出的非空消息（v3）。
+fn resend_target(stored: &StoredMessage) -> Result<(String, String), String> {
+    if stored.direction != "out" {
+        return Err("只能重发本机发出的消息".to_string());
+    }
+    if stored.text.trim().is_empty() {
+        return Err("消息内容为空".to_string());
+    }
+    Ok((stored.peer_id.clone(), stored.text.clone()))
+}
+
 /// 发送图片或文件（F20/F30）：后端按扩展名区分类型，图片在接收端自动接收。
 #[tauri::command]
 pub async fn send_file(
@@ -1630,6 +1688,38 @@ mod tests {
         assert_eq!(
             validate_clean_days(0),
             Err("清理天数必须大于 0".to_string())
+        );
+    }
+
+    /// 构造一条历史消息（v3 重发校验用）。
+    fn resend_message(direction: &str, text: &str) -> StoredMessage {
+        StoredMessage {
+            msg_id: "m-1".to_string(),
+            peer_id: "peer-1".to_string(),
+            direction: direction.to_string(),
+            text: text.to_string(),
+            ts: 1,
+            status: "failed".to_string(),
+        }
+    }
+
+    /// 正常路径：本机发出的非空消息可以重发，且携带原 msg_id 所需的对端与文本。
+    #[test]
+    fn resend_target_accepts_outgoing() {
+        let target = resend_target(&resend_message("out", "hello")).expect("accept");
+        assert_eq!(target, ("peer-1".to_string(), "hello".to_string()));
+    }
+
+    /// 异常：收到的消息不能重发；空白文本也拒绝。
+    #[test]
+    fn resend_target_rejects_incoming_and_empty() {
+        assert_eq!(
+            resend_target(&resend_message("in", "hello")),
+            Err("只能重发本机发出的消息".to_string())
+        );
+        assert_eq!(
+            resend_target(&resend_message("out", "   ")),
+            Err("消息内容为空".to_string())
         );
     }
 

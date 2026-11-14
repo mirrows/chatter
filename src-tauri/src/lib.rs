@@ -475,6 +475,7 @@ pub fn run() -> Result<(), tauri::Error> {
             commands::refresh_devices,
             commands::get_local_device,
             commands::send_text,
+            commands::resend_text,
             commands::send_file,
             commands::accept_file,
             commands::reject_file,

@@ -407,6 +407,20 @@ impl SessionHub {
         text: &str,
     ) -> Result<TextSendResult, SessionError> {
         let msg_id = uuid::Uuid::new_v4().to_string();
+        self.send_text_with_id(peer_id, &msg_id, text).await
+    }
+
+    /// 用**指定的 msg_id** 发送文字消息并等待 ACK（v3：重发时保持幂等）。
+    ///
+    /// 与 `send_text` 的唯一区别是不生成新 ID：接收端与历史都按同一 msg_id 覆盖，
+    /// 因此 ACK 丢失后的重发不会产生重复消息。
+    pub async fn send_text_with_id(
+        &self,
+        peer_id: &str,
+        msg_id: &str,
+        text: &str,
+    ) -> Result<TextSendResult, SessionError> {
+        let msg_id = msg_id.to_string();
         let message = TextMessage {
             msg_id: msg_id.clone(),
             text: text.to_string(),

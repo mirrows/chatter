@@ -466,3 +466,15 @@ message({ type: "success" | "error" | "info", text: string, duration = 1500 }): 
   - APK：11.27 MB，SHA-256 `C72C07A6E8D3085B9894CCA93AFDD44169025356ABB36520E1824A61A6E88E05`。
   - exe：13.31 MB，SHA-256 `4B550AB2E8AD15B1E298C72838A14F6FFDE8836DA1EAE4F0C40CC9ACE8D4BA0A`。
 
+
+### I6.11 · 文字消息重发幂等（2026-11-14）
+
+| # | 项 | 实现 |
+|---|---|---|
+| 1 | 重发产生重复历史/重复气泡 | 根因：`chat.retry()` 复用 `send_text` → 后端生成**新 msg_id** → `append_message` 新增一条，旧 `failed` 记录残留；重启后同一句话出现两条，且首次已送达但 ACK 丢失时对端会真的收到两条 |
+| 2 | 后端 | `SessionHub::send_text_with_id(peer_id, msg_id, text)`（`send_text` 改为生成 id 后委托它）；新命令 `resend_text(msg_id)`：查历史 → 校验 `direction == "out"` 且文本非空 → 复用原 msg_id 发送 → 同 msg_id 覆盖历史（`ts` 沿用原值）；`HistoryStore::find_message()` |
+| 3 | 前端 | `chat.retry()` 改调 `resendText(id)`，不再替换界面 id / 时间戳；`chat.receive()` 按 msg_id 去重（对端重发时只更新状态） |
+
+- **门禁**：`npm run test` **228 passed（26 文件）**（新增 retry 幂等 / 重复消息去重 2 例，改写原 retry 用例）；`cargo test` lib **110**（新增 `find_message`、`resend_target` 正常/异常 3 例）+ 集成 22；`clippy`/`fmt`/`lint`/`vue-tsc`/`prettier` 全绿。
+- **兼容性**：TEXT 帧本就携带 `msg_id`，协议 `ver` 不变；旧对端收到同 msg_id 的重复 TEXT 时按既有 `append_message` upsert 处理（不会重复落库）。
+

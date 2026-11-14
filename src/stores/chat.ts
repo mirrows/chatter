@@ -1,6 +1,13 @@
 // 聊天状态管理（Pinia store）：文字消息收发与发送状态。
 import { defineStore } from "pinia";
-import { getHistory, isTauri, onMessage, onSessionUpdate, sendText } from "../api/tauri";
+import {
+  getHistory,
+  isTauri,
+  onMessage,
+  onSessionUpdate,
+  resendText,
+  sendText,
+} from "../api/tauri";
 import type { IncomingMessage, SessionUpdate, StoredMessage, TextStatus } from "../api/types";
 import { useDeviceStore } from "./devices";
 
@@ -62,6 +69,12 @@ export const useChatStore = defineStore("chat", {
   actions: {
     /** 记录一条收到的消息（F10）；只有不在该会话页时才累计未读（F42）。 */
     receive(message: IncomingMessage) {
+      // 对端重发同一条消息时按 msg_id 去重，避免界面出现重复气泡（v3）。
+      const existing = this.messages.find((m) => m.id === message.msgId);
+      if (existing) {
+        existing.status = "delivered";
+        return;
+      }
       this.messages.push({
         id: message.msgId,
         peerId: message.peerId,
@@ -149,15 +162,14 @@ export const useChatStore = defineStore("chat", {
         return false;
       }
     },
-    /** 重发失败的消息（F11）。 */
+    /** 重发失败的消息（F11；v3 改用 `resend_text`，复用原 msg_id 保持历史/界面幂等）。 */
     async retry(messageId: string): Promise<boolean> {
       const message = this.messages.find((m) => m.id === messageId);
       if (!message || message.direction !== "out") return false;
       message.status = "sending";
       try {
-        const result = await sendText(message.peerId, message.text);
-        message.id = result.msgId;
-        message.ts = Date.now();
+        const result = await resendText(messageId);
+        // 后端复用同一 msg_id：这里不替换 id、不改 ts，历史里也只更新同一条记录。
         message.status = result.status;
         this.error = "";
         return result.status === "delivered";

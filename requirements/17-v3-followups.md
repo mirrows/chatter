@@ -25,7 +25,7 @@
 | 2.2 | M11 完整块级续传（**已排期**：2026-11-14 用户确认） | 按 `02-technical-design.md` §4.7 实现：`FILE_BLOCK_MAP`/`FILE_HAVE`、`.bitmap` 位图随机写、`chunkmap` 协商与降级；当前只有「记录偏移」的简版续传。拆分见 §2.2.1 | 8–12 人日 |
 | 2.3 | Android MulticastLock 前后台管理 | 现在锁随进程存活；切后台不释放，可能影响省电与发现稳定性 | 1 人日 |
 | 2.4 | 断线后自动续传 | M10 只做自动重连，断线任务保持 `failed` 需手动重试 | 2–3 人日 |
-| 2.5 | `resend(msg_id)` 命令（**建议做，待确认**） | 现状：前端重试复用 `send_text` → 生成**新 msg_id** → 历史新增一条、旧 `failed` 记录残留（重启后出现重复气泡），对端也可能收到两条。改为按原 msg_id 重发可保证历史/界面/对端幂等；改动与收益见 §2.5.1 | 0.5–1 人日 |
+| 2.5 | ~~`resend(msg_id)` 命令~~ | ✅ **已完成（2026-11-14）**：新增 `resend_text` 命令 + `SessionHub::send_text_with_id`，前端 `chat.retry()` 改用它（不替换 id/ts），`chat.receive()` 按 msg_id 去重；收益见 §2.5.1 | — |
 
 ### 2.2.1 M11 实施拆分（按 `02` §4.7 既有设计，不需要重新定义协议）
 
@@ -48,7 +48,7 @@
 3. 对端可**按 msg_id 幂等**（接收侧历史已按 msg_id upsert；前端 `receive()` 需补去重），ACK 丢失后的重发不会产生重复消息；
 4. 为后续「自动重试/发送队列」提供幂等键。
 
-**改动点**：`session.rs` 增加 `send_text_with_id(peer_id, msg_id, text)`（复用现有 ACK 逻辑）；`commands.rs` 新增 `resend_text(msg_id)`（校验 direction=out、记录存在、更新状态）；前端 `retry` 改为传 msg_id；`chat.receive()` 按 id 去重；单测覆盖「成功/失败/未知 id/非 out 方向/重复重发」。
+**改动点（已实现，2026-11-14）**：`session.rs` 增加 `send_text_with_id(peer_id, msg_id, text)`（复用现有 ACK 逻辑，`send_text` 改为生成 id 后调用它）；`commands.rs` 新增 `resend_text(msg_id)`（校验 direction=out、记录存在、同 msg_id 覆盖写历史并沿用原 ts）；`HistoryStore::find_message()`；前端 `retry` 改传 msg_id、`receive()` 按 id 去重；单测覆盖「正常/收到的消息/空内容」。遗留：`resend` 暂不区分「ACK 丢失但实际已送达」的极端情形（同 msg_id 重发由对端去重兜底）。
 
 
 

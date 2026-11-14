@@ -5,6 +5,7 @@ import type { IncomingMessage, SessionUpdate } from "../../src/api/types";
 
 const api = vi.hoisted(() => ({
   sendText: vi.fn(),
+  resendText: vi.fn(),
   onMessage: vi.fn(),
   onSessionUpdate: vi.fn(),
   isTauri: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock("../../src/api/tauri", () => ({
   SESSION_UPDATE_EVENT: "session://update",
   TRANSFER_UPDATE_EVENT: "transfer://update",
   sendText: api.sendText,
+  resendText: api.resendText,
   onMessage: api.onMessage,
   onSessionUpdate: api.onSessionUpdate,
   isTauri: api.isTauri,
@@ -77,6 +79,37 @@ describe("chat store", () => {
 
     await expect(store.send("peer-1", "hello")).resolves.toBe(false);
     expect(store.messagesFor("peer-1")[0].status).toBe("failed");
+  });
+
+  it("retry 复用原 msg_id（v3）：不新增消息、id 与时间戳不变", async () => {
+    api.sendText.mockResolvedValue({ msgId: "m-1", status: "failed" });
+    api.resendText.mockResolvedValue({ msgId: "m-1", status: "delivered" });
+    const store = useChatStore();
+
+    await store.send("peer-1", "hello");
+    const before = store.messagesFor("peer-1")[0];
+    expect(before.status).toBe("failed");
+    const beforeTs = before.ts;
+
+    await expect(store.retry("m-1")).resolves.toBe(true);
+
+    const after = store.messagesFor("peer-1");
+    expect(after).toHaveLength(1);
+    expect(after[0].id).toBe("m-1");
+    expect(after[0].status).toBe("delivered");
+    expect(after[0].ts).toBe(beforeTs);
+    expect(api.resendText).toHaveBeenCalledWith("m-1");
+    // 不再调用 send_text，避免历史里产生第二条记录
+    expect(api.sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it("收到同一 msg_id 的重复消息只保留一条（v3）", () => {
+    const store = useChatStore();
+    store.receive({ peerId: "peer-1", msgId: "m-1", text: "hi", ts: 1 });
+    store.receive({ peerId: "peer-1", msgId: "m-1", text: "hi", ts: 1 });
+
+    expect(store.messagesFor("peer-1")).toHaveLength(1);
+    expect(store.unreadFor("peer-1")).toBe(1);
   });
 
   it("调用失败时保留消息并标记失败，记录错误原因", async () => {
@@ -139,19 +172,21 @@ describe("chat store", () => {
     expect(store.reconnectAttempt("peer-1")).toBe(0);
   });
 
-  it("retry 重发失败消息并更新状态与时间", async () => {
+  it("retry 复用原 msg_id 并推进状态（v3）", async () => {
     api.sendText.mockResolvedValueOnce({ msgId: "m-1", status: "failed" });
     const store = useChatStore();
     await store.send("peer-1", "hello");
     const failedId = store.messagesFor("peer-1")[0].id;
 
-    api.sendText.mockResolvedValueOnce({ msgId: "m-9", status: "delivered" });
+    api.resendText.mockResolvedValueOnce({ msgId: "m-1", status: "delivered" });
     await expect(store.retry(failedId)).resolves.toBe(true);
 
     const message = store.messagesFor("peer-1")[0];
-    expect(message.id).toBe("m-9");
+    expect(message.id).toBe("m-1");
     expect(message.status).toBe("delivered");
-    expect(api.sendText).toHaveBeenCalledTimes(2);
+    expect(api.resendText).toHaveBeenCalledWith("m-1");
+    // 只发送过一次（重发走 resend_text，不再调用 send_text）
+    expect(api.sendText).toHaveBeenCalledTimes(1);
   });
 
   it("init 订阅消息与会话事件，非 Tauri 环境跳过", async () => {

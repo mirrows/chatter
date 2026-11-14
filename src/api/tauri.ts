@@ -46,6 +46,11 @@ export function sendText(peerId: string, text: string): Promise<TextSendResult> 
   return invoke<TextSendResult>("send_text", { peerId, text });
 }
 
+/** 重发一条失败消息（v3）：复用原 msg_id，历史与界面都只保留一条。 */
+export function resendText(msgId: string): Promise<TextSendResult> {
+  return invoke<TextSendResult>("resend_text", { msgId });
+}
+
 /** 订阅设备上下线事件（F4），返回取消订阅函数。 */
 export function onDeviceUpdate(handler: (update: DeviceUpdate) => void): Promise<UnlistenFn> {
   return listen<DeviceUpdate>(DEVICE_UPDATE_EVENT, (event) => handler(event.payload));
