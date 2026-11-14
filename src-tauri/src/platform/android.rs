@@ -101,6 +101,22 @@ pub fn save_file(path: &str, file_name: &str) -> Result<Option<String>, String> 
     }
 }
 
+/// SAF 选中的 Uri 复制到应用缓存目录，返回本地绝对路径（Android 发送图片/文件用）。
+///
+/// `pick_file` 在 Android 上拿不到文件系统路径（只有 `content://` Uri），
+/// Rust 无法直接读取 SAF 内容，因此由 Kotlin 侧复制到私有缓存后再发送。
+pub fn import_file(uri: &str) -> Result<String, String> {
+    #[derive(Serialize)]
+    struct ImportRequest<'a> {
+        uri: &'a str,
+    }
+    #[derive(Deserialize)]
+    struct Imported {
+        path: String,
+    }
+    call::<Imported>("importFile", ImportRequest { uri }).map(|imported| imported.path)
+}
+
 /// 传输期间启动前台服务（常驻通知，避免被系统挂起）。
 pub fn start_foreground(title: &str, body: &str) -> Result<(), String> {
     call::<serde_json::Value>("startForegroundService", ForegroundRequest { title, body })

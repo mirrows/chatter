@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.net.wifi.WifiManager
+import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import androidx.activity.result.ActivityResult
 import androidx.core.content.FileProvider
@@ -17,6 +18,9 @@ import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 import java.io.File
 
+/** 文件复制缓冲：默认 8KB 对大文件太慢，改为 1MB（v3）。 */
+private const val COPY_BUFFER = 1 shl 20
+
 /** SAF 导出参数：源文件绝对路径 + 建议文件名。 */
 @InvokeArg
 class SaveFileArgs {
@@ -28,6 +32,12 @@ class SaveFileArgs {
 @InvokeArg
 class OpenFileArgs {
   lateinit var path: String
+}
+
+/** SAF 导入参数：文件选择器返回的 `content://` Uri。 */
+@InvokeArg
+class ImportFileArgs {
+  lateinit var uri: String
 }
 
 /** 前台服务参数：通知标题与正文。 */
@@ -145,22 +155,69 @@ class ChattersAndroidPlugin(private val activity: Activity) : Plugin(activity) {
       invoke.reject("cancelled")
       return
     }
-    try {
-      if (source == null) {
-        invoke.reject("missing source path")
-        return
-      }
-      val uri: Uri = result.data!!.data!!
+    if (source == null) {
+      invoke.reject("missing source path")
+      return
+    }
+    val uri: Uri = result.data!!.data!!
+    // 复制可能耗时较长（大文件），放到后台线程，避免卡住界面（v3）。
+    copyInBackground(invoke) {
       activity.contentResolver.openOutputStream(uri)?.use { output ->
-        File(source).inputStream().use { input -> input.copyTo(output) }
+        File(source).inputStream().use { input -> input.copyTo(output, COPY_BUFFER) }
       } ?: throw IllegalStateException("cannot open output stream")
-      val ret = JSObject()
-      ret.put("path", uri.toString())
-      invoke.resolve(ret)
-    } catch (e: Exception) {
-      invoke.reject(e.message ?: "failed to write file")
+      uri.toString()
     }
   }
+
+  /**
+   * 把 SAF 选中的 Uri 复制到缓存目录，返回本地绝对路径。
+   *
+   * Android 的文件选择器只返回 `content://` Uri，Rust 侧无法用 std::fs 读取，
+   * 因此发送图片/文件前先由 Kotlin 复制到私有缓存。
+   *
+   * v3 优化：复制改到后台线程 + 1MB 缓冲。旧实现用默认 8KB 缓冲并在命令线程同步复制，
+   * 几百 MB 的文件会明显卡顿、且调用方迟迟拿不到结果。
+   */
+  @Command
+  fun importFile(invoke: Invoke) {
+    val uri = try {
+      Uri.parse(invoke.parseArgs(ImportFileArgs::class.java).uri)
+    } catch (e: Exception) {
+      invoke.reject(e.message ?: "failed to parse uri")
+      return
+    }
+    copyInBackground(invoke) {
+      val dir = File(activity.cacheDir, "imports").apply { mkdirs() }
+      val name = displayName(uri) ?: "import-${System.currentTimeMillis()}"
+      val target = uniqueFile(dir, name)
+      activity.contentResolver.openInputStream(uri)?.use { input ->
+        target.outputStream().use { output -> input.copyTo(output, COPY_BUFFER) }
+      } ?: throw IllegalStateException("cannot open input stream")
+      target.absolutePath
+    }
+  }
+
+  /**
+   * 在后台线程执行文件复制，完成后回主线程回传结果。
+   *
+   * @param block 返回需要回传给 Rust 的本地路径。
+   */
+  private fun copyInBackground(invoke: Invoke, block: () -> String) {
+    Thread {
+      try {
+        val path = block()
+        activity.runOnUiThread {
+          val ret = JSObject()
+          ret.put("path", path)
+          invoke.resolve(ret)
+        }
+      } catch (e: Exception) {
+        val message = e.message ?: "copy failed"
+        activity.runOnUiThread { invoke.reject(message) }
+      }
+    }.start()
+  }
+
 
   /** 传输期间启动前台服务（常驻通知）。 */
   @Command
@@ -185,13 +242,39 @@ class ChattersAndroidPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
+  /** 读取 SAF 文件的显示名（保留扩展名，供图片/文件类型识别）。 */
+  private fun displayName(uri: Uri): String? {
+    val columns = arrayOf(OpenableColumns.DISPLAY_NAME)
+    activity.contentResolver.query(uri, columns, null, null, null)?.use { cursor ->
+      if (cursor.moveToFirst()) {
+        val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        if (index >= 0 && !cursor.isNull(index)) return cursor.getString(index)
+      }
+    }
+    return uri.lastPathSegment?.substringAfterLast('/')
+  }
+
+  /** 缓存目录内避免重名覆盖（同名文件追加序号）。 */
+  private fun uniqueFile(dir: File, name: String): File {
+    var candidate = File(dir, name)
+    if (!candidate.exists()) return candidate
+    val base = name.substringBeforeLast('.', name)
+    val ext = name.substringAfterLast('.', "")
+    var index = 1
+    while (candidate.exists()) {
+      candidate = File(dir, if (ext.isEmpty()) "$base ($index)" else "$base ($index).$ext")
+      index += 1
+    }
+    return candidate
+  }
+
   /** 私有目录不在 file_paths 覆盖范围时，先复制到缓存目录再共享。 */
   private fun fileUri(file: File): Uri =
     try {
       FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", file)
     } catch (e: IllegalArgumentException) {
       val cached = File(activity.cacheDir, file.name)
-      file.copyTo(cached, overwrite = true)
+      file.copyTo(cached, overwrite = true, bufferSize = COPY_BUFFER)
       FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", cached)
     }
 

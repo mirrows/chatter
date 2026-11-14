@@ -24,7 +24,7 @@ use session::{start_session, SessionConfig, SessionEvent, DEFAULT_ACK_TIMEOUT};
 use std::path::Path;
 #[cfg(not(target_os = "android"))]
 use std::path::PathBuf;
-use storage::{now_millis, HistoryStore, StoredMessage, StoredTransfer};
+use storage::{HistoryStore, StoredMessage, StoredTransfer};
 #[cfg(desktop)]
 use tauri::menu::{Menu, MenuItem};
 #[cfg(desktop)]
@@ -182,6 +182,12 @@ pub fn run() -> Result<(), tauri::Error> {
             let transfer_router = transfers.clone();
             #[cfg(target_os = "android")]
             let transfer_watch = transfers.clone();
+            // 发送方向的历史需要记住源文件，供重新进入会话后预览图片（v3）。
+            let transfer_source = transfers.clone();
+
+            // 发现服务句柄：先创建，注入 AppState 后再启动发现任务，
+            // 便于发送失败/切回前台时主动触发重新发现（v2/M9 真机问题）。
+            let discovery = discovery::DiscoveryHandle::default();
 
             let state = AppState::new(
                 cfg.clone(),
@@ -189,6 +195,7 @@ pub fn run() -> Result<(), tauri::Error> {
                 hub,
                 transfers,
                 history.clone(),
+                discovery.clone(),
             );
             let devices = state.devices.clone();
             app.manage(state);
@@ -259,7 +266,12 @@ pub fn run() -> Result<(), tauri::Error> {
                             transferred: info.transferred,
                             state: info.state.as_str().to_string(),
                             path: info.path.clone(),
-                            ts: now_millis(),
+                            source_path: if info.direction == TransferDirection::Send {
+                                transfer_source.source_path(&info.transfer_id).await
+                            } else {
+                                None
+                            },
+                            ts: info.ts,
                         })
                         .await
                     {
@@ -388,6 +400,7 @@ pub fn run() -> Result<(), tauri::Error> {
                     cfg.device_id.clone(),
                     cfg.nickname.clone(),
                     cfg.tcp_port,
+                    discovery,
                 )
                 .await
                 {
@@ -417,6 +430,7 @@ pub fn run() -> Result<(), tauri::Error> {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_devices,
+            commands::refresh_devices,
             commands::get_local_device,
             commands::send_text,
             commands::send_file,
@@ -430,7 +444,10 @@ pub fn run() -> Result<(), tauri::Error> {
             commands::get_settings,
             commands::save_settings,
             commands::get_history,
+            commands::get_history_page,
             commands::clear_history,
+            commands::open_download_dir,
+            commands::pick_download_dir,
             commands::get_autostart,
             commands::set_autostart,
             commands::add_device_by_ip,
@@ -505,6 +522,7 @@ mod tests {
             state,
             path: None,
             error: None,
+            ts: 1,
         }
     }
 

@@ -9,6 +9,7 @@ const api = vi.hoisted(() => ({
   listDevices: vi.fn(),
   getLocalDevice: vi.fn(),
   onDeviceUpdate: vi.fn(),
+  refreshDevices: vi.fn(),
   isTauri: vi.fn(),
 }));
 
@@ -18,6 +19,7 @@ vi.mock("../../src/api/tauri", () => ({
   listDevices: api.listDevices,
   getLocalDevice: api.getLocalDevice,
   onDeviceUpdate: api.onDeviceUpdate,
+  refreshDevices: api.refreshDevices,
   isTauri: api.isTauri,
 }));
 

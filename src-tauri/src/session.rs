@@ -176,7 +176,6 @@ struct PeerHandle {
     features: Vec<String>,
     reconnect_addr: Option<SocketAddr>,
 }
-
 /// 已握手完成的对端信息。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerInfo {
@@ -195,6 +194,11 @@ struct HubInner {
     reconnect_delays: Vec<u64>,
     peers: Mutex<HashMap<String, PeerHandle>>,
     pending_acks: Mutex<HashMap<String, oneshot::Sender<()>>>,
+    /// 最近一次成功握手时的对端 TCP 地址。
+    ///
+    /// 会话断开后仍保留：发现表因移动端广播被过滤而超时移除对端时，
+    /// 发送消息仍可据此重新连接（v2/M9 真机问题）。
+    known_addrs: Mutex<HashMap<String, SocketAddr>>,
     events: mpsc::Sender<SessionEvent>,
 }
 
@@ -236,6 +240,7 @@ pub async fn start_session(
         reconnect_delays: config.reconnect_delays,
         peers: Mutex::new(HashMap::new()),
         pending_acks: Mutex::new(HashMap::new()),
+        known_addrs: Mutex::new(HashMap::new()),
         events: event_tx,
     });
     let hub = SessionHub {
@@ -370,6 +375,13 @@ impl SessionHub {
         self.inner.peers.lock().await.contains_key(peer_id)
     }
 
+    /// 最近一次与该设备成功握手时的 TCP 地址。
+    ///
+    /// 用于发现表里找不到对端（移动端广播被系统过滤导致超时下线）时的兜底重连。
+    pub async fn known_addr(&self, peer_id: &str) -> Option<SocketAddr> {
+        self.inner.known_addrs.lock().await.get(peer_id).copied()
+    }
+
     /// 对端声明的能力（v2）。未连接或 v1 对端返回空列表。
     pub async fn peer_features(&self, peer_id: &str) -> Vec<String> {
         self.inner
@@ -456,6 +468,14 @@ async fn establish(
 
     // v2 对端会告知监听端口；v1 对端没有该字段，无法自动重连（不影响其它功能）。
     let reconnect_addr = peer.tcp_port.map(|port| SocketAddr::new(addr.ip(), port));
+
+    // 记录最近一次成功握手的地址：会话断开或发现表超时移除对端后，
+    // 发送消息仍可据此重新连接（v2/M9 真机「peer not found」兜底）。
+    inner
+        .known_addrs
+        .lock()
+        .await
+        .insert(peer.device_id.clone(), reconnect_addr.unwrap_or(addr));
 
     // 写入任务：通道关闭即退出（PeerHandle 被移除时发送端随之释放）。
     let (tx, mut rx) = mpsc::channel::<Frame>(64);

@@ -50,6 +50,21 @@ pub fn tray_supported() -> bool {
     !cfg!(target_os = "android")
 }
 
+/// 当前运行平台标识（与前端 `LocalDevice.platform` 对应）。
+///
+/// 前端据此隐藏平台能力差异的入口（如 Android 无「打开所在文件夹」）。
+pub fn name() -> &'static str {
+    if cfg!(target_os = "android") {
+        "android"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,5 +118,18 @@ mod tests {
         assert!(!tray_supported());
         #[cfg(not(target_os = "android"))]
         assert!(tray_supported());
+    }
+
+    /// 平台标识：与实际编译 target 一致。
+    #[test]
+    fn platform_name_matches_target() {
+        #[cfg(target_os = "android")]
+        assert_eq!(name(), "android");
+        #[cfg(windows)]
+        assert_eq!(name(), "windows");
+        #[cfg(target_os = "macos")]
+        assert_eq!(name(), "macos");
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+        assert_eq!(name(), "linux");
     }
 }

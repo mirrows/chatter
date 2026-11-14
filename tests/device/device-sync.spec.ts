@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   listDevices: vi.fn(),
   getLocalDevice: vi.fn(),
   onDeviceUpdate: vi.fn(),
+  refreshDevices: vi.fn(),
   isTauri: vi.fn(),
 }));
 
@@ -15,6 +16,7 @@ vi.mock("../../src/api/tauri", () => ({
   listDevices: api.listDevices,
   getLocalDevice: api.getLocalDevice,
   onDeviceUpdate: api.onDeviceUpdate,
+  refreshDevices: api.refreshDevices,
   isTauri: api.isTauri,
 }));
 
@@ -35,6 +37,7 @@ const local: LocalDevice = {
   discoveryPort: 28100,
   tcpPort: 28101,
   fingerprint: "1111-2222-3333-4444",
+  platform: "windows",
 };
 
 describe("device store init", () => {
@@ -96,5 +99,28 @@ describe("device store init", () => {
     expect(store.started).toBe(false);
     expect(store.error).toBe("ipc unavailable");
     expect(store.count).toBe(0);
+  });
+
+  it("refresh 触发重新发现并重新拉取快照（v2/M9 真机问题）", async () => {
+    api.isTauri.mockReturnValue(true);
+    api.refreshDevices.mockResolvedValue(undefined);
+    api.listDevices.mockResolvedValue([peer]);
+
+    const store = useDeviceStore();
+    await store.refresh();
+
+    expect(api.refreshDevices).toHaveBeenCalledTimes(1);
+    expect(api.listDevices).toHaveBeenCalledTimes(1);
+    expect(store.count).toBe(1);
+    expect(store.error).toBe("");
+  });
+
+  it("非 Tauri 环境下 refresh 不做任何 IPC 调用", async () => {
+    api.isTauri.mockReturnValue(false);
+
+    const store = useDeviceStore();
+    await store.refresh();
+
+    expect(api.refreshDevices).not.toHaveBeenCalled();
   });
 });

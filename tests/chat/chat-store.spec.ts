@@ -8,6 +8,10 @@ const api = vi.hoisted(() => ({
   onMessage: vi.fn(),
   onSessionUpdate: vi.fn(),
   isTauri: vi.fn(),
+  refreshDevices: vi.fn(),
+  listDevices: vi.fn(),
+  getLocalDevice: vi.fn(),
+  onDeviceUpdate: vi.fn(),
 }));
 
 vi.mock("../../src/api/tauri", () => ({
@@ -18,6 +22,10 @@ vi.mock("../../src/api/tauri", () => ({
   onMessage: api.onMessage,
   onSessionUpdate: api.onSessionUpdate,
   isTauri: api.isTauri,
+  refreshDevices: api.refreshDevices,
+  listDevices: api.listDevices,
+  getLocalDevice: api.getLocalDevice,
+  onDeviceUpdate: api.onDeviceUpdate,
   getHistory: vi.fn().mockResolvedValue({ messages: [], transfers: [] }),
   listTransfers: vi.fn(),
   onTransferUpdate: vi.fn(),
@@ -239,5 +247,57 @@ describe("chat store", () => {
     const messages = store.messagesFor("peer-1");
     expect(messages.map((m) => m.id)).toEqual(["m-1", "m-2"]);
     expect(messages[1].status).toBe("failed");
+  });
+  it("对端不在设备表时触发一次重新发现（v2/M9 真机问题）", async () => {
+    api.isTauri.mockReturnValue(true);
+    api.refreshDevices.mockResolvedValue(undefined);
+    api.listDevices.mockResolvedValue([]);
+    api.sendText.mockRejectedValue(new Error("peer not found: peer-1"));
+
+    const store = useChatStore();
+    await expect(store.send("peer-1", "hello")).resolves.toBe(false);
+
+    expect(api.refreshDevices).toHaveBeenCalledTimes(1);
+    expect(store.error).toBe("peer not found: peer-1");
+  });
+
+  it("其他发送错误不触发重新发现", async () => {
+    api.isTauri.mockReturnValue(true);
+    api.sendText.mockRejectedValue(new Error("empty message"));
+
+    const store = useChatStore();
+    await store.send("peer-1", "hello");
+
+    expect(api.refreshDevices).not.toHaveBeenCalled();
+  });
+  it("当前会话收到消息不累计未读（v2/M9）", () => {
+    const store = useChatStore();
+    store.setActive("peer-1");
+    store.receive(incoming("m-1", "hi", 1));
+
+    expect(store.messagesFor("peer-1")).toHaveLength(1);
+    expect(store.unreadFor("peer-1")).toBe(0);
+  });
+
+  it("不在该会话页时累计未读，进入会话后清零（v2/M9）", () => {
+    const store = useChatStore();
+
+    // 不在任何会话页 → 累计。
+    store.receive(incoming("m-1", "a", 1));
+    expect(store.unreadFor("peer-1")).toBe(1);
+
+    // 正在看别的会话 → 仍然累计。
+    store.setActive("peer-2");
+    store.receive(incoming("m-2", "b", 2));
+    expect(store.unreadFor("peer-1")).toBe(2);
+
+    // 进入该会话即清零。
+    store.setActive("peer-1");
+    expect(store.unreadFor("peer-1")).toBe(0);
+
+    // 离开会话后重新累计。
+    store.setActive(null);
+    store.receive(incoming("m-3", "c", 3));
+    expect(store.unreadFor("peer-1")).toBe(1);
   });
 });

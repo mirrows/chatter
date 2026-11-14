@@ -214,3 +214,113 @@ cd src-tauri; npx tauri android dev      # 或 npx tauri android run --target x8
 - [ ] 1 GB 文件接收 → SAF 导出到用户目录，重名不覆盖
 - [ ] 拒绝通知权限时传输仍正常，仅无提醒
 - [ ] Android 11 / 13 / 14 各一台（OEM 后台策略差异）
+
+## 9. 可安装 APK 产出（arm64 + debug keystore，2026-11-02）
+
+前置环境（本机实测）：`JAVA_HOME=D:\tools\jdk17\jdk-17.0.2`、`ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk`
+（platforms `android-36`、build-tools `36.0.0`、NDK `27.0.12077973`）、Rust target `aarch64-linux-android`、
+Gradle `D:\tools\gradle\gradle-9.6.1`。工程项目 `src-tauri/gen/android` 已入库（`.so` 与 `build/` 不入库）。
+
+### 9.1 复现命令
+
+```powershell
+# 一条命令：前端构建 → Rust 交叉编译 → 复制 .so → Gradle 出包 → zipalign + 签名
+powershell -ExecutionPolicy Bypass -File .\tools\build-android-arm64.ps1
+
+# 已有 dist/ 与 aarch64 .so 时，仅重打包
+powershell -ExecutionPolicy Bypass -File .\tools\build-android-arm64.ps1 -SkipFrontendBuild -SkipRustBuild
+```
+
+单步等价命令：
+
+```powershell
+$env:JAVA_HOME='D:\tools\jdk17\jdk-17.0.2'
+Copy-Item 'src-tauri\target\aarch64-linux-android\release\libchatters_lib.so' `
+          'src-tauri\gen\android\app\src\main\jniLibs\arm64-v8a\libchatters_lib.so' -Force
+cd src-tauri\gen\android
+D:\tools\gradle\gradle-9.6.1\bin\gradle.bat assembleArm64Release -x rustBuildArm64Release --console=plain
+# → app\build\outputs\apk\arm64\release\app-arm64-release-unsigned.apk
+```
+
+### 9.2 产物清单（2026-11-02 实测）
+
+| 项 | 值 |
+|---|---|
+| 签名包 | `src-tauri/target/android/Chatters-1.0.0-rc.1-arm64-debugsigned.apk` |
+| 大小 | 11.13 MB（中间件 aligned 11.07 MB） |
+| SHA-256 | `C72802E470266EF7A55F194E7C7A87344917F12274173BABDFFE4210801A9DF3`（2026-11-14 v3/I6.6 重出包） |
+| 原生库 | `lib/arm64-v8a/libchatters_lib.so`（9.38 MB，含当前前端资源） |
+| 包名 / 版本 | `com.chatters.app` / versionCode `1000000`，versionName `1.0.0-rc.1` |
+| SDK | minSdk `24`、targetSdk `36`、compileSdk `36` |
+| 签名方案 | v2 + v3（未启用 v1），证书 `C=US, O=Android, CN=Android Debug` |
+| 安装验证 | ⏳ 未执行：`adb devices` 无设备（仍无真机） |
+
+校验命令：
+
+```powershell
+$bt="$env:ANDROID_HOME\build-tools\36.0.0"
+& "$bt\aapt2.exe" dump badging <apk> | Select-String 'package:|sdkVersion|native-code'
+& "$bt\apksigner.bat" verify --verbose --print-certs <apk>
+```
+
+### 9.3 已知限制与排错
+
+1. **只出 arm64**：armv7/x86 需另编 `armv7-linux-androideabi` / `i686-linux-android`，复制对应 `.so` 后再
+   `assembleArmRelease` / `assembleX86Release`（脚本支持 `-AndroidAbi` / `-GradleVariant` / `-ApkAbi` 覆盖）。
+2. **历史空壳包**：`build/outputs/apk/{arm,arm64,x86}/release/app-*-unsigned.apk` 曾只有 1.63 MB 且不含 `lib/`。
+   原因是 `jniLibs` 当时只手工放过 `x86_64` 的 `.so`，Gradle 跳过 rust 任务后只打出无 native 库的空包。
+   **该目录旧产物不可用，以 `src-tauri/target/android/` 为准。**
+3. **不要直接 `tauri android build`**：本机 Windows 下 rust 任务找 `npm.bat`（实际只有 `npm.cmd`）失败，
+   `.so` 软链需开发者模式/管理员（§7.2）。故固定「手工 copy `.so` + `-x rustBuild*`」。
+4. **跳过 rust 任务不会更新 `.so`**：改过 Rust 代码后必须去掉 `-SkipRustBuild`（或手工
+   `cargo build --release --target aarch64-linux-android --features tauri/custom-protocol`）。
+   判断 `.so` 是否含最新前端：在二进制里搜 `dist/assets/index-*.js` 的文件名（本次为 `index-DPub4BO6.js`）。
+5. **debug keystore 仅用于 sideload**：`~/.android/debug.keystore`（pass/alias 均为 `android`），
+   上架需真实 keystore + `signingConfigs`（`13` §9.5、`01` Q13）。
+6. **APK 不入库**：`gen/android/.gitignore` 忽略 `build` 与 `jniLibs`，根 `.gitignore` 忽略 `target/`；
+   新克隆仓库无 APK，需按 §9.1 重建。
+
+### 9.4 后续（待真机）
+
+- [ ] `adb install -r` 安装并启动，确认不白屏、可手动 IP 建连
+- [ ] 接 §8.4 真机清单（广播发现 / 锁屏保活 10 min / 1 GB SAF 导出）
+- [ ] 正式签名：真实 keystore + `signingConfigs`，同时产出 armv7/arm64 双 ABI 或 AAB
+
+
+## 10. 真机验收问题与修复（2026-11-02）
+
+首轮真机联调（PC ↔ 手机同一局域网）暴露 5 个问题，全部已定位到代码并修复。
+
+| # | 现象 | 根因 | 修复 |
+|---|---|---|---|
+| 1 | PC 启动弹出命令行窗口 | `src-tauri/src/main.rs` 未声明 `windows_subsystem`，二进制默认 console 子系统 | 加 `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`；release 下日志可用 `CHATTERS_LOG=1` 落到 `%APPDATA%\com.chatters.app\chatters.log` |
+| 2 | 手机端约 15–20 s 后设备从列表消失，Android→PC 发送报 `peer not found: <uuid>` | `MulticastLock` 只保组播，Android 省电策略过滤**入站广播**；发现只在启动时发一次 `query`，之后靠 5 s 广播 announce，`OFFLINE_AFTER=15s` 把对端 sweep 掉；`ensure_session` 只查发现表 | ① 每 10 s 发 `query`（对端必然**单播**回应），并对已知设备逐个单播 query；② 离线阈值 15 s → 45 s；③ 会话层缓存上次握手地址（`SessionHub::known_addr`），发送时三级回退；④ 新增 `refresh_devices` + 切回前台/发送失败自动刷新 |
+| 3 | Android「打开所在文件夹」无意义 | 前端无平台信息，按钮无条件渲染 | `get_local_device` 增加 `platform`；Android 隐藏该按钮，保留「打开文件 / 另存为」 |
+| 4 | Windows 图片预览不可用 | `get_image_preview` 只查内存任务表；重启后表为空（前端从 `history.json` 重建卡片）→ `unknown transfer` | 回退历史记录（`HistoryStore::find_transfer`）；失败原因分档（未完成 / 文件丢失 / 过大）并在卡片上显示 |
+| 5 | Windows 右键弹出 WebView 默认菜单 | 未禁用 WebView2 上下文菜单 | Windows 前端拦截 `contextmenu`（`src/utils/contextmenu.ts`） |
+
+### 10.1 复测清单
+
+- [ ] 手机打开 App 等 60 s，设备列表仍稳定显示 PC（广播过滤不再导致误离线）
+- [ ] 手机→PC 连发 3 条文字全部「已送达」；切后台 2 分钟回前台再发仍成功
+- [ ] PC 重启后打开旧会话，历史图片有预览
+- [ ] PC release exe 双击无黑框、右键无菜单
+- [ ] Android 接收卡片只有「打开文件 / 另存为」
+
+
+### 10.2 第二轮真机问题（2026-11-04）
+
+| # | 现象 | 根因 | 修复 |
+|---|---|---|---|
+| 6 | PC 发送图片后，**发送方**自己也看不到预览（要等对端接收完成） | `TransferCard` 只在 `state=done` 渲染预览；`get_image_preview` 只认 `info.path`（接收落盘路径），发送任务的源文件路径存在 `Task.source` 里没被使用 | `TransferManager::source_path()` 暴露源文件；`preview_source` 增加「发送方向 → 用源文件，且不要求 done」分支；卡片改为「发送方向始终可预览，接收方向需 done」 |
+| 7 | 移动端能收，但**发**图片/文件失败且无任何提示，PC 无响应、手机也不出现传输卡片 | ① Android 文件选择器只返回 `content://` Uri，`pick_file` 直接 `into_path()` 失败；Rust 无法读 SAF 流；② `pickAndSend` 把错误写进 `transfers.error`，但 Chat 页面从不渲染该字段 | ① Kotlin 新增 `importFile`（复制 SAF 流到 `cacheDir/imports`，重名自动加序号）＋ Rust `platform::android::import_file`＋`pick_file` 按 `FilePath::Path/Url` 分支处理；② Chat 页新增传输错误横幅（可关闭），i18n `chat.transferFailed` |
+| 8 | 正在与该对端聊天时收到消息，返回列表仍显示未读徽标 | `chat.receive()` 无条件 `unread[peerId] += 1`，只有挂载时 `markRead` 一次 | `chat` 增加 `activePeer` + `setActive()`：进入会话即清零，会话内收到该对端消息不累计；离开会话后恢复累计。`Chat.vue` 挂载/卸载时设置 |
+
+### 10.3 复测清单（第二轮）
+
+- [ ] PC 发送图片后，**PC 端立即**看到缩略图（不必等手机接收完成）
+- [ ] 手机点「发送图片/发送文件」能选中相册/文件并成功发出，PC 收到
+- [ ] 手机发送失败时，会话页显示「操作失败：…」横幅（可关闭）
+- [ ] 停留在与该对端的会话页时收到消息：返回设备列表**无**未读徽标
+- [ ] 停留在设备列表或别的会话时收到消息：未读徽标正常累计，进入会话后清零
+

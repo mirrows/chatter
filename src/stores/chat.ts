@@ -1,7 +1,8 @@
 // 聊天状态管理（Pinia store）：文字消息收发与发送状态。
 import { defineStore } from "pinia";
 import { getHistory, isTauri, onMessage, onSessionUpdate, sendText } from "../api/tauri";
-import type { IncomingMessage, SessionUpdate, TextStatus } from "../api/types";
+import type { IncomingMessage, SessionUpdate, StoredMessage, TextStatus } from "../api/types";
+import { useDeviceStore } from "./devices";
 
 /** 界面上的消息发送状态（含乐观发送中的临时状态）。 */
 export type MessageStatus = TextStatus | "sending";
@@ -38,6 +39,8 @@ export const useChatStore = defineStore("chat", {
     connected: [] as string[],
     /** 是否已订阅后端事件。 */
     started: false,
+    /** 当前正在查看的会话（空串表示不在会话页，v2/M9 未读判定）。 */
+    activePeer: "",
     /** 最近一次错误信息（空串表示无错误）。 */
     error: "",
     /** 各对端未读消息数（F42）。 */
@@ -57,7 +60,7 @@ export const useChatStore = defineStore("chat", {
     reconnectAttempt: (state) => (peerId: string) => state.reconnecting[peerId] ?? 0,
   },
   actions: {
-    /** 记录一条收到的消息（F10），并累加未读数（F42）。 */
+    /** 记录一条收到的消息（F10）；只有不在该会话页时才累计未读（F42）。 */
     receive(message: IncomingMessage) {
       this.messages.push({
         id: message.msgId,
@@ -67,7 +70,27 @@ export const useChatStore = defineStore("chat", {
         ts: message.ts,
         status: "delivered",
       });
-      this.unread[message.peerId] = (this.unread[message.peerId] ?? 0) + 1;
+      if (this.activePeer !== message.peerId) {
+        this.unread[message.peerId] = (this.unread[message.peerId] ?? 0) + 1;
+      }
+    },
+    /**
+     * 设置/清除当前打开的会话。
+     *
+     * 进入会话即视为已读（清零未读），离开后新消息才会重新累计未读（v2/M9）。
+     */
+    setActive(peerId: string | null) {
+      this.activePeer = peerId ?? "";
+      if (peerId) this.unread[peerId] = 0;
+    },
+    /**
+     * 收到新的文件/图片时计入未读（与文字消息同一套规则，v3）。
+     *
+     * 正在与该对端聊天时不计入，避免自己看着的会话出现红色徽标。
+     */
+    noteIncomingTransfer(peerId: string) {
+      if (this.activePeer === peerId) return;
+      this.unread[peerId] = (this.unread[peerId] ?? 0) + 1;
     },
     /** 打开会话时清除该对端未读数（F42）。 */
     markRead(peerId: string) {
@@ -122,6 +145,7 @@ export const useChatStore = defineStore("chat", {
         const message = this.messages.find((m) => m.id === tempId);
         if (message) message.status = "failed";
         this.error = err instanceof Error ? err.message : String(err);
+        await this.refreshDevicesIfPeerMissing(this.error);
         return false;
       }
     },
@@ -140,8 +164,18 @@ export const useChatStore = defineStore("chat", {
       } catch (err) {
         message.status = "failed";
         this.error = err instanceof Error ? err.message : String(err);
+        await this.refreshDevicesIfPeerMissing(this.error);
         return false;
       }
+    },
+    /**
+     * 对端不在设备表时触发一次重新发现（v2/M9：移动端广播被过滤导致设备被超时移除）。
+     *
+     * 只刷新设备列表，不自动重发——ACK 丢失时自动重发会产生重复消息。
+     */
+    async refreshDevicesIfPeerMissing(reason: string) {
+      if (!reason.includes("peer not found")) return;
+      await useDeviceStore().refresh();
     },
     /** 订阅后端消息与会话事件；重复调用无副作用。 */
     async init() {
@@ -177,6 +211,22 @@ export const useChatStore = defineStore("chat", {
         this.error = err instanceof Error ? err.message : String(err);
       }
     },
+    /**
+     * 写入一条历史消息（v3 分页加载用）。
+     *
+     * 与 `loadHistory` 的区别：只做去重与追加，不触发其它副作用，便于按页拼接。
+     */
+    ingestMessage(stored: StoredMessage) {
+      if (this.messages.some((message) => message.id === stored.msgId)) return;
+      this.messages.push({
+        id: stored.msgId,
+        peerId: stored.peerId,
+        direction: stored.direction,
+        text: stored.text,
+        ts: stored.ts,
+        status: stored.status,
+      });
+    },
     /** 清空全部消息与会话状态（测试与后续"清空历史"复用）。 */
     clear() {
       this.messages = [];
@@ -184,6 +234,7 @@ export const useChatStore = defineStore("chat", {
       this.unread = {};
       this.reconnecting = {};
       this.started = false;
+      this.activePeer = "";
       this.error = "";
     },
   },

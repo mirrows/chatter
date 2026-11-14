@@ -27,6 +27,8 @@ export interface LocalDevice {
   tcpPort: number;
   /** 本机指纹（v2/M10）。 */
   fingerprint: string;
+  /** 运行平台（v2/M9）：用于隐藏平台不支持的操作。 */
+  platform: "android" | "windows" | "macos" | "linux";
 }
 
 /** 设备表变更事件（与 Rust DeviceUpdate 对应，`device://update` 事件载荷）。 */
@@ -100,6 +102,8 @@ export interface TransferInfo {
   path: string | null;
   /** 失败原因。 */
   error: string | null;
+  /** 任务创建时间（Unix 毫秒），用于与文本消息按时间混排（v3）。 */
+  ts: number;
 }
 
 /** 设置项（与 Rust SettingsDto 对应，F52）。 */
@@ -149,6 +153,8 @@ export interface StoredTransfer {
   transferred: number;
   state: TransferState;
   path: string | null;
+  /** 发送方向的本地源文件路径（v3：历史图片预览用）。 */
+  sourcePath?: string | null;
   ts: number;
 }
 
@@ -156,6 +162,18 @@ export interface StoredTransfer {
 export interface History {
   messages: StoredMessage[];
   transfers: StoredTransfer[];
+}
+
+/** 历史时间线条目（与 Rust `HistoryItem` 对应，v3 分页用）。 */
+export type HistoryItem =
+  ({ itemType: "message" } & StoredMessage) | ({ itemType: "transfer" } & StoredTransfer);
+
+/** 历史分页结果（与 Rust `HistoryPageDto` 对应）。 */
+export interface HistoryPage {
+  /** 按时间升序的条目，最多 `limit` 条。 */
+  items: HistoryItem[];
+  /** 是否还有更早的记录。 */
+  hasMore: boolean;
 }
 
 /** 批量发送结果（与 Rust PathSendResult 对应，拖拽入口）。 */

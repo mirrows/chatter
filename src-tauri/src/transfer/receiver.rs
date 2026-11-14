@@ -120,6 +120,7 @@ pub(crate) async fn on_offer(
         state: TransferState::Pending,
         path: None,
         error: None,
+        ts: crate::storage::now_millis(),
     };
 
     {

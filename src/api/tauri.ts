@@ -5,6 +5,7 @@ import type {
   DeviceEntry,
   DeviceUpdate,
   History,
+  HistoryPage,
   IncomingMessage,
   LocalDevice,
   PathSendResult,
@@ -27,6 +28,11 @@ export const TRANSFER_UPDATE_EVENT = "transfer://update";
 /** 获取当前在线设备列表（后端 DeviceTable 快照）。 */
 export function listDevices(): Promise<DeviceEntry[]> {
   return invoke<DeviceEntry[]>("list_devices");
+}
+
+/** 主动触发一次设备重新发现（Android 广播会被过滤，切前台/发送失败时调用）。 */
+export function refreshDevices(): Promise<void> {
+  return invoke<void>("refresh_devices");
 }
 
 /** 获取本机设备信息（昵称、ID、端口）。 */
@@ -114,6 +120,24 @@ export function getHistory(peerId?: string): Promise<History> {
   return invoke<History>("get_history", { peerId: peerId ?? null });
 }
 
+/**
+ * 分页读取历史（v3 向上无限滚动）。
+ *
+ * `beforeTs` 为游标：传当前时间线最老条目的 `ts` 可加载更早的一页；
+ * 默认每页 100 条（后端上限 500）。
+ */
+export function getHistoryPage(
+  peerId: string | undefined,
+  beforeTs?: number,
+  limit = 100,
+): Promise<HistoryPage> {
+  return invoke<HistoryPage>("get_history_page", {
+    peerId: peerId ?? null,
+    beforeTs: beforeTs ?? null,
+    limit,
+  });
+}
+
 /** 清空历史（F40/F41）；`peerId` 为空时清空全部，`deleteFiles` 为 true 时删除下载目录内的历史文件。 */
 export function clearHistory(peerId?: string, deleteFiles = false): Promise<number> {
   return invoke<number>("clear_history", { peerId: peerId ?? null, deleteFiles });
@@ -132,6 +156,16 @@ export function revealTransferFile(transferId: string): Promise<void> {
 /** 另存为（F23）；取消时返回 null。 */
 export function saveTransferAs(transferId: string): Promise<string | null> {
   return invoke<string | null>("save_transfer_as", { transferId });
+}
+
+/** 选择下载目录（v3，桌面端；Android 返回错误）。取消时返回 null。 */
+export function pickDownloadDir(): Promise<string | null> {
+  return invoke<string | null>("pick_download_dir");
+}
+
+/** 打开下载目录（v3，桌面端；Android 会返回错误）。 */
+export function openDownloadDir(): Promise<void> {
+  return invoke<void>("open_download_dir");
 }
 
 /** 是否开启开机自启（F50）。 */

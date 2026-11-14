@@ -58,6 +58,7 @@ describe("device store", () => {
       discoveryPort: 28100,
       tcpPort: 28101,
       fingerprint: "1111-2222-3333-4444",
+      platform: "windows",
     };
     store.started = true;
     store.error = "x";
@@ -67,5 +68,29 @@ describe("device store", () => {
     expect(store.localName).toBe("");
     expect(store.started).toBe(false);
     expect(store.error).toBe("");
+  });
+
+  it("依据平台暴露 isAndroid / isWindows（v2/M9）", () => {
+    const store = useDeviceStore();
+    const base = {
+      deviceId: "self",
+      name: "PC-self",
+      discoveryPort: 28100,
+      tcpPort: 28101,
+      fingerprint: "1111-2222-3333-4444",
+    };
+
+    store.local = { ...base, platform: "android" };
+    expect(store.isAndroid).toBe(true);
+    expect(store.isWindows).toBe(false);
+
+    store.local = { ...base, platform: "windows" };
+    expect(store.isAndroid).toBe(false);
+    expect(store.isWindows).toBe(true);
+
+    // 未取到后端信息时两个判断都为 false，避免误隐藏按钮。
+    store.local = null;
+    expect(store.isAndroid).toBe(false);
+    expect(store.isWindows).toBe(false);
   });
 });

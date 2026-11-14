@@ -296,6 +296,7 @@ Wayland 限制、GNOME 默认无托盘、发行版库版本差异。
 
 ### 9.5 依赖环境
 Android Studio + SDK/NDK、2–3 台真机、USB 调试、联网（Gradle）、发布用 keystore（未签名 APK 可先交付，Q13）。
+> 可安装 arm64 包的产出命令与产物清单见 `15-m9-spike-plan.md` §9（debug keystore 签名，可 sideload）。
 
 ### 9.6 风险（按影响排序）
 1. 后台被杀/OEM 限流 → 前台服务 + 电池白名单引导；

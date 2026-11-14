@@ -20,10 +20,29 @@
       <input :value="store.settings.deviceId" disabled data-testid="settings-device-id" />
     </label>
 
-    <label class="field">
+    <div class="field">
       <span>{{ t("settings.downloadDir") }}</span>
-      <input v-model="store.settings.downloadDir" data-testid="settings-download-dir" />
-    </label>
+      <div class="field-row">
+        <!-- 只读：点击弹系统目录选择框（v3 需求 1） -->
+        <input
+          :value="store.settings.downloadDir"
+          readonly
+          :class="{ readonly: true, locked: isAndroid }"
+          data-testid="settings-download-dir"
+          :title="isAndroid ? t('settings.downloadDirLocked') : t('settings.changeDir')"
+          @click="pickDownloadDir"
+        />
+        <button
+          v-if="!isAndroid"
+          type="button"
+          class="secondary"
+          data-testid="settings-open-download-dir"
+          @click="openDownloadDir"
+        >
+          {{ t("settings.openFolder") }}
+        </button>
+      </div>
+    </div>
 
     <div class="row">
       <label class="field">
@@ -92,11 +111,7 @@
       <button data-testid="settings-save" :disabled="store.saving" @click="save">
         {{ t("settings.save") }}
       </button>
-      <button
-        class="secondary"
-        data-testid="settings-clear-history"
-        @click="store.clearAllHistory()"
-      >
+      <button class="secondary" data-testid="settings-clear-history" @click="clearAllHistory">
         {{ t("settings.clearHistory") }}
       </button>
     </div>
@@ -112,15 +127,51 @@
 
 <script setup lang="ts">
 import { onMounted, watch } from "vue";
+import { usePlatform } from "../composables/usePlatform";
 import { t } from "../i18n";
+import { confirmDialog } from "../stores/confirm";
+import { message } from "../stores/message";
 import { useSettingsStore } from "../stores/settings";
 
 const store = useSettingsStore();
+const { isAndroid } = usePlatform();
 
 onMounted(async () => {
   await store.load();
   store.applyTheme();
 });
+
+/** 打开下载目录（v3）：桌面端在文件管理器中打开。 */
+async function openDownloadDir() {
+  await store.openDownloadDir();
+}
+
+/** 点击下载目录输入框 → 弹系统目录选择框并即时保存（v3 需求 1）。 */
+async function pickDownloadDir() {
+  // Android 的下载目录固定在应用私有目录：用轻提示说明（R8.1/R8.3），不写页面级 error。
+  if (isAndroid.value) {
+    message.info(t("settings.downloadDirLocked"));
+    return;
+  }
+  await store.pickDownloadDir();
+}
+
+/**
+ * 清空全部历史：始终二次确认，文案随「同时删除文件」勾选变化（v3 需求 7）。
+ *
+ * 勾选时后端会把下载目录内的文件一并清空（含历史记录里没有的）。
+ */
+async function clearAllHistory() {
+  const confirmed = await confirmDialog({
+    title: t("settings.clearHistory"),
+    message: store.deleteFiles
+      ? t("settings.clearHistoryConfirmFiles")
+      : t("settings.clearHistoryConfirm"),
+    danger: true,
+    confirmText: t("common.ok"),
+  });
+  if (confirmed) await store.clearAllHistory();
+}
 
 // 主题改动即时生效（无需保存即可预览）。
 watch(
@@ -160,6 +211,28 @@ h2 {
   gap: 4px;
   font-size: 13px;
   color: var(--muted);
+}
+.field-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.field-row input {
+  flex: 1;
+}
+/* 只读输入：看起来可点击，提示点击后可更改目录（v3） */
+.field-row input.readonly {
+  cursor: pointer;
+  opacity: 0.9;
+}
+/* 移动端目录不可改：光标恢复默认，避免误以为可点开选择框（v3） */
+.field-row input.readonly.locked {
+  cursor: default;
+}
+.field-row button {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  font-size: 13px;
 }
 input,
 select {

@@ -54,8 +54,11 @@ pub struct StoredTransfer {
     pub transferred: u64,
     /// 状态。
     pub state: String,
-    /// 落盘路径。
+    /// 落盘路径（接收方向）。
     pub path: Option<String>,
+    /// 发送方向的本地源文件路径（v3：历史图片预览用）。
+    #[serde(default)]
+    pub source_path: Option<String>,
     /// 最近更新时间（Unix 毫秒）。
     pub ts: i64,
 }
@@ -109,6 +112,18 @@ impl HistoryStore {
             .filter(|m| peer_id.is_none_or(|id| m.peer_id == id))
             .cloned()
             .collect()
+    }
+
+    /// 按任务 ID 查找一条传输记录。
+    ///
+    /// 重启后内存任务表为空，图片预览需要据此回退到历史记录（F23）。
+    pub async fn find_transfer(&self, transfer_id: &str) -> Option<StoredTransfer> {
+        let history = self.inner.lock().await;
+        history
+            .transfers
+            .iter()
+            .find(|t| t.transfer_id == transfer_id)
+            .cloned()
     }
 
     /// 读取某对端的传输记录。
@@ -237,6 +252,7 @@ mod tests {
             transferred: 10,
             state: "done".to_string(),
             path: Some("C:/dl/a.txt".to_string()),
+            source_path: None,
             ts: 1,
         }
     }
@@ -355,6 +371,25 @@ mod tests {
         let messages = store.messages_for(None).await;
         assert_eq!(messages.len(), MAX_MESSAGES);
         assert_eq!(messages[0].msg_id, "m-5", "最旧的 5 条被裁剪");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+    /// 正常路径：按任务 ID 查回记录（重启后图片预览回退历史用，F23）。
+    #[tokio::test]
+    async fn find_transfer_by_id() {
+        let dir = std::env::temp_dir().join("chatters_history_find_transfer");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("history.json");
+        std::fs::remove_file(&path).ok();
+
+        let store = HistoryStore::open(path).await;
+        add_transfer(&store, "t-1", "peer-1").await;
+        add_transfer(&store, "t-2", "peer-1").await;
+
+        let found = store.find_transfer("t-2").await.expect("transfer found");
+        assert_eq!(found.transfer_id, "t-2");
+        assert_eq!(found.state, "done");
+        assert!(store.find_transfer("missing").await.is_none());
 
         std::fs::remove_dir_all(&dir).ok();
     }

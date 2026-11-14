@@ -30,6 +30,14 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
 
+# Windows 专属（v3）：打开文件改用 ShellExecuteW，避免 cmd 控制台黑框与额外进程。
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 # 集成测试放在 tests/<module>/<feature>.rs（rules.md R2.2）；
 # Cargo 只自动发现 tests/ 根目录下的文件，因此子目录需显式登记。
 [[test]]

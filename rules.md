@@ -60,3 +60,15 @@
 1. R7.1 构建运行不得依赖网络（依赖安装除外）。
 2. R7.2 依赖版本锁定（`Cargo.lock`、`package-lock.json` 提交入库）。
 3. R7.3 项目须能按 `README.md` 步骤在干净机器上构建。
+
+## 8. 交互与提示规范（v3）
+
+1. **R8.1 轻量级提示统一使用 `message` 组件。** 成功 / 失败 / 信息类的一次性提示必须调用
+   `src/stores/message.ts` 导出的 `message.success` / `message.error` / `message.info`
+   （渲染由 `MessageHost.vue` 负责），**默认 1.5s 后自动消失**（`DEFAULT_MESSAGE_DURATION`），
+   同屏最多 3 条、超出排队。
+2. R8.2 禁止使用 `window.alert` / `window.confirm`。需要用户确认用 `confirmDialog`（`stores/confirm.ts`），
+   需要单行输入用 `promptDialog`（`stores/prompt.ts`）。
+3. R8.3 平台能力缺失（例如 Android 无法修改下载目录）用 `message.info` 说明，不得写入页面级 `error` 状态。
+4. R8.4 页面级常驻信息（保存成功徽标、需重启提示、清空历史结果）保留就地展示，不属于轻量提示。
+5. R8.5 提示文案同样走 i18n 资源（见 R3.3），不得在组件内硬编码。

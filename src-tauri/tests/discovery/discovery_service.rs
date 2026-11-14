@@ -4,9 +4,12 @@
 //! - 对端 announce → 本机产生 DeviceUp；
 //! - 对端 query → 本机单播回应 announce；
 //! - 对端 bye → 本机产生 DeviceBye；
-//! - 自己发出的包 / 非法字节被忽略，不产生事件。
+//! - 自己发出的包 / 非法字节被忽略，不产生事件；
+//! - `request_refresh` 立即补发查询（移动端收不到广播时的兜底）。
 
-use chatters_lib::discovery::{start_discovery, DiscoveryEvent, DiscoveryPacket, DiscoveryType};
+use chatters_lib::discovery::{
+    start_discovery, DiscoveryEvent, DiscoveryHandle, DiscoveryPacket, DiscoveryType,
+};
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::UdpSocket;
@@ -33,6 +36,7 @@ async fn announce_from_peer_emits_device_up() {
         "local-device".to_string(),
         "PC-local".to_string(),
         28101,
+        DiscoveryHandle::default(),
     )
     .await
     .expect("start discovery");
@@ -61,7 +65,7 @@ async fn announce_from_peer_emits_device_up() {
     task.abort();
 }
 
-/// 正常路径：收到 query 时单播回应 announce（携带本机 device_id）。
+/// 正常路径：收到 query 时单播回应 announce（携带本机 device_id 与昵称）。
 #[tokio::test]
 async fn query_is_answered_with_announce() {
     let port = free_udp_port().await;
@@ -70,6 +74,7 @@ async fn query_is_answered_with_announce() {
         "local-device-2".to_string(),
         "PC-local-2".to_string(),
         28101,
+        DiscoveryHandle::default(),
     )
     .await
     .expect("start discovery");
@@ -88,6 +93,7 @@ async fn query_is_answered_with_announce() {
     let packet = DiscoveryPacket::decode(&buf[..len]).expect("decode announce");
     assert_eq!(packet.packet_type, DiscoveryType::Announce);
     assert_eq!(packet.device_id, "local-device-2");
+    assert_eq!(packet.name, "PC-local-2");
     assert_eq!(packet.tcp_port, 28101);
 
     task.abort();
@@ -102,6 +108,7 @@ async fn bye_from_peer_emits_device_bye() {
         "local-device-3".to_string(),
         "PC-local-3".to_string(),
         28101,
+        DiscoveryHandle::default(),
     )
     .await
     .expect("start discovery");
@@ -130,6 +137,7 @@ async fn malformed_and_self_packets_are_ignored() {
         "local-device-4".to_string(),
         "PC-local-4".to_string(),
         28101,
+        DiscoveryHandle::default(),
     )
     .await
     .expect("start discovery");
@@ -154,6 +162,47 @@ async fn malformed_and_self_packets_are_ignored() {
             .is_err(),
         "self or malformed packets must not produce events"
     );
+
+    task.abort();
+}
+
+/// 正常路径：`request_refresh` 立即补发 query（移动端收不到广播时的兜底）。
+#[tokio::test]
+async fn request_refresh_sends_immediate_query() {
+    let port = free_udp_port().await;
+    let handle = DiscoveryHandle::default();
+    let (mut rx, task) = start_discovery(
+        port,
+        "local-device-5".to_string(),
+        "PC-local-5".to_string(),
+        28101,
+        handle.clone(),
+    )
+    .await
+    .expect("start discovery");
+
+    // 先让发现服务记住对端地址（announce 的源地址即对端的发现端口）。
+    let peer = UdpSocket::bind("127.0.0.1:0").await.expect("peer bind");
+    let announce = DiscoveryPacket::new(DiscoveryType::Announce, "peer-5", "PC-peer", 28102);
+    peer.send_to(&announce.encode(), loopback(port))
+        .await
+        .expect("send announce");
+    let event = timeout(Duration::from_secs(3), rx.recv())
+        .await
+        .expect("timed out waiting for device up")
+        .expect("discovery channel closed");
+    assert!(matches!(event, DiscoveryEvent::DeviceUp(_)));
+
+    handle.request_refresh();
+
+    let mut buf = [0u8; 2048];
+    let (len, _from) = timeout(Duration::from_secs(3), peer.recv_from(&mut buf))
+        .await
+        .expect("timed out waiting for refreshed query")
+        .expect("receive refreshed query");
+    let packet = DiscoveryPacket::decode(&buf[..len]).expect("decode query");
+    assert_eq!(packet.packet_type, DiscoveryType::Query);
+    assert_eq!(packet.device_id, "local-device-5");
 
     task.abort();
 }

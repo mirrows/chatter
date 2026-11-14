@@ -9,6 +9,8 @@ const api = vi.hoisted(() => ({
   getAutostart: vi.fn(),
   setAutostart: vi.fn(),
   clearHistory: vi.fn(),
+  openDownloadDir: vi.fn(),
+  pickDownloadDir: vi.fn(),
   isTauri: vi.fn(),
 }));
 
@@ -18,6 +20,8 @@ vi.mock("../../src/api/tauri", () => ({
   getAutostart: api.getAutostart,
   setAutostart: api.setAutostart,
   clearHistory: api.clearHistory,
+  openDownloadDir: api.openDownloadDir,
+  pickDownloadDir: api.pickDownloadDir,
   isTauri: api.isTauri,
 }));
 
@@ -79,6 +83,38 @@ describe("settings store", () => {
     api.saveSettings.mockRejectedValue(new Error("昵称不能为空"));
     const store = useSettingsStore();
     await expect(store.save()).resolves.toBe(false);
+    expect(store.error).toBe("昵称不能为空");
+  });
+
+  it("renameLocal 未加载时先拉取设置再保存昵称（v3）", async () => {
+    api.getSettings.mockResolvedValue({ ...settings });
+    api.saveSettings.mockResolvedValue({ restartRequired: true });
+    const store = useSettingsStore();
+
+    await expect(store.renameLocal("  我的电脑 ")).resolves.toBe(true);
+
+    expect(api.getSettings).toHaveBeenCalled();
+    expect(api.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ nickname: "我的电脑" }),
+    );
+    expect(store.settings.nickname).toBe("我的电脑");
+    expect(store.restartRequired).toBe(true);
+    expect(store.error).toBe("");
+  });
+
+  it("renameLocal 空名称不保存并返回 false（v3）", async () => {
+    const store = useSettingsStore();
+    await expect(store.renameLocal("   ")).resolves.toBe(false);
+    expect(api.saveSettings).not.toHaveBeenCalled();
+    expect(api.getSettings).not.toHaveBeenCalled();
+  });
+
+  it("renameLocal 保存失败时记录错误并返回 false（v3）", async () => {
+    api.getSettings.mockResolvedValue({ ...settings });
+    api.saveSettings.mockRejectedValue(new Error("昵称不能为空"));
+    const store = useSettingsStore();
+
+    await expect(store.renameLocal("PC-new")).resolves.toBe(false);
     expect(store.error).toBe("昵称不能为空");
   });
 

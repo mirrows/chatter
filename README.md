@@ -72,6 +72,44 @@ npm run tauri build -- --no-bundle
 
 > 首次运行请在 Windows 防火墙弹窗中允许「专用网络」，否则 UDP 28100 / TCP 28101 会被拦截。
 
+> release 双击启动**不会**弹控制台窗口。需要现场日志时设置环境变量 `CHATTERS_LOG=1`，
+> 日志追加写入 `%APPDATA%\com.chatters.app\chatters.log`。Windows 上已禁用 WebView 的右键菜单。
+
+### Android（arm64，debug 签名，可 sideload）
+
+前置：JDK **17**（AGP 8.x 要求）、`ANDROID_HOME`（需 `platforms;android-36`、`build-tools;36.0.0`、`ndk;27.0.12077973`）、
+Rust target `aarch64-linux-android`。工程已在 `src-tauri/gen/android`（`tauri android init` 产物）。
+
+```powershell
+# 一条命令：前端构建 → Rust 交叉编译 → 复制 .so → Gradle 出包 → zipalign + 签名
+powershell -ExecutionPolicy Bypass -File .\tools\build-android-arm64.ps1
+
+# 已构建过前端 / Rust 时可跳过，仅重打包（最常用）
+powershell -ExecutionPolicy Bypass -File .\tools\build-android-arm64.ps1 -SkipFrontendBuild -SkipRustBuild
+```
+
+产物：`src-tauri/target/android/Chatters-1.0.0-rc.1-arm64-debugsigned.apk`（约 10.9 MB，含 `lib/arm64-v8a/libchatters_lib.so`）。
+
+```powershell
+# 真机安装（首次需在系统设置里允许「未知来源」/「安装未知应用」）
+adb install -r src-tauri\target\android\Chatters-1.0.0-rc.1-arm64-debugsigned.apk
+```
+
+> - 该包用 Android **debug keystore** 签名（`~/.android/debug.keystore`），仅用于 sideload 测试，
+>   **不可用于应用商店**；正式发布需换真实 keystore（`01-project-overview.md` Q13）。
+> - `gen/android/.../jniLibs/<abi>/libchatters_lib.so` 与 `build/` 产物均被 `.gitignore` 忽略，
+>   新克隆的仓库**不会有 APK**，需按上面命令重新构建。
+> - 只出 arm64；armv7/x86 需另编对应 Rust target 并复制 `.so` 后再 `assembleArmRelease` / `assembleX86Release`。
+> - 图标：源头是 `src-tauri/icons/chatters-512.png`（`npx tauri icon` 可重生成全套）；
+>   打包脚本会自动把 `icons/android/**` 同步进 `gen/android/.../res/**` 并校验 SHA-256，
+>   无需手工复制（遗漏会导致 APK 仍是 Tauri 默认启动器图标）。
+> - Android 无「打开所在文件夹」能力，接收卡片只保留「打开文件 / 另存为」。
+> - 移动端收不到 UDP 广播时（Android Wi-Fi 省电策略），发现服务会每 10 s 主动 query 让对端单播回应；
+>   45 s 无包才判定离线。切回前台会自动刷新设备列表。
+> - 手机发送图片/文件走系统选择器（SAF）：选中项会先复制到应用缓存 `cacheDir/imports/` 再发送，
+>   发送失败不会静默——会话页会显示「操作失败：…」。
+> - 未读徽标只在**不在该会话页**时累计；进入会话即标记已读。
+
 ## 开发与验证
 
 要求：Node **≥ 20**（本机若 PATH 中存在旧版 Node，请先把新版加入 PATH）、Rust stable、Windows 10/11 x64。

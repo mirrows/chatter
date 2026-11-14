@@ -10,9 +10,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 
 /// 发现协议 magic，过滤无关包。
 pub const MAGIC: &str = "CHTRS";
@@ -20,8 +21,16 @@ pub const MAGIC: &str = "CHTRS";
 pub const PROTOCOL_VERSION: u8 = 1;
 /// announce 心跳间隔。
 pub const ANNOUNCE_INTERVAL: Duration = Duration::from_secs(5);
+/// 主动查询间隔。
+///
+/// Android 的 Wi-Fi 省电策略会过滤**入站广播**（`MulticastLock` 只覆盖组播），
+/// 只依赖 announce 广播会让对端在 15s 后被误判离线。周期性 `query` 会让对端
+/// 用**单播**回应 announce（单播不受过滤），因此这是移动端保持设备表新鲜的关键。
+pub const QUERY_INTERVAL: Duration = Duration::from_secs(10);
 /// 超过该时长未收到某设备包则判定离线。
-pub const OFFLINE_AFTER: Duration = Duration::from_secs(15);
+///
+/// 取值覆盖约 4 个查询周期，容忍广播丢失与短暂休眠（移动端常见）。
+pub const OFFLINE_AFTER: Duration = Duration::from_secs(45);
 
 /// 发现包类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,24 +181,59 @@ pub fn broadcast_addr(port: u16) -> SocketAddr {
     SocketAddr::from((Ipv4Addr::BROADCAST, port))
 }
 
+/// 发现服务句柄：允许上层主动触发一次 query/announce。
+///
+/// 典型用途：发送消息前发现设备表里没有对端（移动端广播被过滤、或刚从后台切回），
+/// 调用 `request_refresh()` 立即补发查询，而不是等下一个周期。
+#[derive(Clone, Debug, Default)]
+pub struct DiscoveryHandle {
+    refresh: Arc<Notify>,
+}
+
+impl DiscoveryHandle {
+    /// 请求立即补发一次 query 与 announce；发现任务未运行时为空操作。
+    pub fn request_refresh(&self) {
+        self.refresh.notify_one();
+    }
+}
+
+/// 发送一轮查询：广播 + 对已发现设备逐个单播。
+///
+/// 单播查询是移动端的关键兜底——即使广播的收发被系统过滤，单播应答仍可到达。
+async fn send_query_round(
+    socket: &UdpSocket,
+    query: &DiscoveryPacket,
+    broadcast_addr: SocketAddr,
+    table: &DeviceTable,
+) {
+    let payload = query.encode();
+    let _ = socket.send_to(&payload, broadcast_addr).await;
+    for entry in table.list() {
+        let _ = socket.send_to(&payload, entry.addr).await;
+    }
+}
+
 /// 启动发现服务：绑定 UDP 端口，广播 announce/query，回应 query。
 ///
-/// `local_device_id`/`local_name` 用于本机 announce 包；
-/// `tcp_port` 为本机 TCP 监听端口。
-/// 返回事件接收端，由调用方消费。
+/// `local_device_id`/`local_name` 用于本机 announce 包；`tcp_port` 为本机 TCP 监听端口；
+/// `handle` 用于接收上层的「立即刷新」请求。返回事件接收端，由调用方消费。
+///
+/// 昵称在启动时读取：本机改名后立即在本地显示，其他设备在下次广播（应用重启后）看到新名称。
 pub async fn start_discovery(
     bind_port: u16,
     local_device_id: String,
     local_name: String,
     tcp_port: u16,
+    handle: DiscoveryHandle,
 ) -> Result<(mpsc::Receiver<DiscoveryEvent>, tokio::task::JoinHandle<()>), std::io::Error> {
     let socket = UdpSocket::bind(("0.0.0.0", bind_port)).await?;
     socket.set_broadcast(true)?;
     let (tx, rx) = mpsc::channel::<DiscoveryEvent>(64);
 
-    let handle = tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         let mut table = DeviceTable::default();
-        let mut announce = tokio::time::interval(ANNOUNCE_INTERVAL);
+        let mut announce_tick = tokio::time::interval(ANNOUNCE_INTERVAL);
+        let mut query_tick = tokio::time::interval(QUERY_INTERVAL);
         let mut sweep = tokio::time::interval(Duration::from_secs(1));
         let mut buf = [0u8; 2048];
 
@@ -213,8 +257,15 @@ pub async fn start_discovery(
 
         loop {
             tokio::select! {
-                _ = announce.tick() => {
+                _ = announce_tick.tick() => {
                     let _ = socket.send_to(&ann.encode(), broadcast_addr).await;
+                }
+                _ = query_tick.tick() => {
+                    send_query_round(&socket, &query, broadcast_addr, &table).await;
+                }
+                _ = handle.refresh.notified() => {
+                    let _ = socket.send_to(&ann.encode(), broadcast_addr).await;
+                    send_query_round(&socket, &query, broadcast_addr, &table).await;
                 }
                 _ = sweep.tick() => {
                     for d in table.sweep_offline() {
@@ -245,7 +296,7 @@ pub async fn start_discovery(
         }
     });
 
-    Ok((rx, handle))
+    Ok((rx, task))
 }
 
 #[cfg(test)]

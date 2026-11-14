@@ -40,6 +40,9 @@ vi.mock("../../src/api/tauri", () => ({
 
 // 必须在 mock 之后导入被测模块。
 import { useTransferStore } from "../../src/stores/transfers";
+import { useChatStore } from "../../src/stores/chat";
+import { useDeviceStore } from "../../src/stores/devices";
+import { useMessageStore } from "../../src/stores/message";
 
 const transfer = (overrides: Partial<TransferInfo> = {}): TransferInfo => ({
   transferId: "t-1",
@@ -52,6 +55,7 @@ const transfer = (overrides: Partial<TransferInfo> = {}): TransferInfo => ({
   state: "pending",
   path: null,
   error: null,
+  ts: 1_700_000_000_000,
   ...overrides,
 });
 
@@ -107,6 +111,51 @@ describe("transfer store", () => {
     expect(store.items).toHaveLength(1);
   });
 
+  it("Android 选择文件期间提示「正在准备文件」，完成后清除（v3）", async () => {
+    const devices = useDeviceStore();
+    devices.local = {
+      deviceId: "self",
+      name: "phone",
+      discoveryPort: 28100,
+      tcpPort: 28101,
+      fingerprint: "1111-2222-3333-4444",
+      platform: "android",
+    };
+    let release: (path: string | null) => void = () => {};
+    api.pickFile.mockReturnValue(
+      new Promise<string | null>((resolve) => {
+        release = resolve;
+      }),
+    );
+    api.sendFile.mockResolvedValue(transfer({ state: "offered", direction: "send" }));
+
+    const messages = useMessageStore();
+    const store = useTransferStore();
+    const pending = store.pickAndSend("peer-1", false);
+
+    // 复制期间（pickFile 尚未返回）提示可见
+    await Promise.resolve();
+    expect(messages.visible.map((item) => item.text)).toEqual([
+      "正在准备文件…（文件越大耗时越久）",
+    ]);
+
+    release("C:/tmp/big.bin");
+    await pending;
+
+    expect(messages.visible).toHaveLength(0);
+    expect(api.sendFile).toHaveBeenCalledWith("peer-1", "C:/tmp/big.bin");
+  });
+
+  it("桌面端选择文件不显示准备提示（v3）", async () => {
+    api.pickFile.mockResolvedValue(null);
+    const messages = useMessageStore();
+    const store = useTransferStore();
+
+    await store.pickAndSend("peer-1", false);
+
+    expect(messages.visible).toHaveLength(0);
+  });
+
   it("发送失败时记录错误并返回 null（不抛异常）", async () => {
     api.pickFile.mockResolvedValue("C:/tmp/broken.bin");
     api.sendFile.mockRejectedValue(new Error("peer not found"));
@@ -115,6 +164,47 @@ describe("transfer store", () => {
     await expect(store.pickAndSend("peer-1", false)).resolves.toBeNull();
     expect(store.error).toBe("peer not found");
     expect(store.items).toHaveLength(0);
+  });
+
+  it("openFile 文件不在时按方向给出轻提示（v3）", async () => {
+    api.openTransferFile.mockRejectedValue(new Error("file unavailable"));
+    const messages = useMessageStore();
+    const store = useTransferStore();
+    store.upsert(
+      transfer({ transferId: "t-send", direction: "send", kind: "file", state: "done" }),
+    );
+    store.upsert(
+      transfer({ transferId: "t-recv", direction: "receive", kind: "file", state: "done" }),
+    );
+
+    await expect(store.openFile("t-send")).resolves.toBe(false);
+    expect(messages.visible[messages.visible.length - 1]?.text).toBe("源文件已被移动或删除");
+
+    await expect(store.openFile("t-recv")).resolves.toBe(false);
+    expect(messages.visible[messages.visible.length - 1]?.text).toBe(
+      "文件已被清理，如需重新获取请让对方重新发送",
+    );
+  });
+
+  it("openFile 打开成功返回 true 且不弹提示（v3）", async () => {
+    api.openTransferFile.mockResolvedValue(undefined);
+    const messages = useMessageStore();
+    const store = useTransferStore();
+    store.upsert(transfer({ transferId: "t-1", kind: "file", state: "done" }));
+
+    await expect(store.openFile("t-1")).resolves.toBe(true);
+    expect(messages.visible).toHaveLength(0);
+  });
+
+  it("openFile 其它失败给出通用提示（v3）", async () => {
+    api.openTransferFile.mockRejectedValue(new Error("permission denied"));
+    const messages = useMessageStore();
+    const store = useTransferStore();
+    store.upsert(transfer({ transferId: "t-1", kind: "file", state: "done" }));
+
+    await store.openFile("t-1");
+    expect(messages.visible[messages.visible.length - 1]?.text).toBe("打开文件失败");
+    expect(store.error).toBe("permission denied");
   });
 
   it("accept/reject/cancel 调用对应命令", async () => {
@@ -250,5 +340,39 @@ describe("transfer store", () => {
     await offline.init();
     expect(api.listTransfers).toHaveBeenCalledTimes(1);
     expect(offline.started).toBe(false);
+  });
+
+  it("收到新的文件/图片时未读 +1，同一任务的后续更新不重复计数（v3）", () => {
+    const store = useTransferStore();
+    const chat = useChatStore();
+
+    store.apply(transfer({ transferId: "t-1", direction: "receive", state: "pending" }));
+    expect(chat.unreadFor("peer-1")).toBe(1);
+
+    // 同一任务状态推进（pending → transferring → done）不再累加
+    store.apply(transfer({ transferId: "t-1", direction: "receive", state: "transferring" }));
+    store.apply(transfer({ transferId: "t-1", direction: "receive", state: "done" }));
+    expect(chat.unreadFor("peer-1")).toBe(1);
+
+    // 另一张图/另一个文件各 +1
+    store.apply(transfer({ transferId: "t-2", direction: "receive", state: "pending" }));
+    expect(chat.unreadFor("peer-1")).toBe(2);
+  });
+
+  it("正在与该对端聊天时，收到的文件不计未读（v3）", () => {
+    const store = useTransferStore();
+    const chat = useChatStore();
+    chat.setActive("peer-1");
+
+    store.apply(transfer({ transferId: "t-1", direction: "receive", state: "pending" }));
+    expect(chat.unreadFor("peer-1")).toBe(0);
+  });
+
+  it("发送方向的新任务不计未读（v3）", () => {
+    const store = useTransferStore();
+    const chat = useChatStore();
+
+    store.apply(transfer({ transferId: "t-1", direction: "send", state: "offered" }));
+    expect(chat.unreadFor("peer-1")).toBe(0);
   });
 });

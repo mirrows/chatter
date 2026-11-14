@@ -172,6 +172,10 @@ pub struct TransferInfo {
     pub path: Option<String>,
     /// 失败原因（面向用户，可为空）。
     pub error: Option<String>,
+    /// 任务创建时间（Unix 毫秒）。
+    ///
+    /// 前端用它与文字消息按时间混排（v3：图片/文件不再单独置顶展示）。
+    pub ts: i64,
 }
 
 /// 传输层事件。
@@ -505,6 +509,17 @@ impl TransferManager {
         tasks.get(transfer_id).map(|t| t.info.clone())
     }
 
+    /// 发送任务的本地源文件路径。
+    ///
+    /// 发送方预览图片用：源文件就在本地，不必等对端接收完成（v2/M9 真机问题）。
+    pub async fn source_path(&self, transfer_id: &str) -> Option<String> {
+        let tasks = self.inner.tasks.lock().await;
+        tasks
+            .get(transfer_id)
+            .and_then(|t| t.source.as_ref())
+            .map(|p| p.to_string_lossy().to_string())
+    }
+
     /// 发送本地文件（图片或普通文件）。
     ///
     /// sha256 在阻塞线程池中流式计算后再发 OFFER；数据块发送在后台任务里执行，
@@ -541,6 +556,7 @@ impl TransferManager {
             state: TransferState::Offered,
             path: None,
             error: None,
+            ts: crate::storage::now_millis(),
         };
         {
             let mut tasks = self.inner.tasks.lock().await;

@@ -5,6 +5,8 @@ import {
   getAutostart,
   getSettings,
   isTauri,
+  openDownloadDir as openDownloadDirApi,
+  pickDownloadDir as pickDownloadDirApi,
   saveSettings,
   setAutostart,
 } from "../api/tauri";
@@ -72,12 +74,60 @@ export const useSettingsStore = defineStore("settings", {
         this.saving = false;
       }
     },
+    /**
+     * 修改本机名称（v3）：写入配置并保存。
+     *
+     * 本机界面立即显示新名称；其他设备在下次连接/应用重启后的广播中看到新名称。
+     * 成功返回 true（调用方负责提示），失败写入 error 并返回 false。
+     */
+    async renameLocal(name: string): Promise<boolean> {
+      const nickname = name.trim();
+      if (!nickname) return false;
+      try {
+        if (!this.loaded) {
+          this.settings = await getSettings();
+          this.loaded = true;
+        }
+        this.settings = { ...this.settings, nickname };
+        const result = await saveSettings(this.settings);
+        this.restartRequired = result.restartRequired;
+        this.error = "";
+        return true;
+      } catch (err) {
+        this.error = err instanceof Error ? err.message : String(err);
+        return false;
+      }
+    },
     /** 切换开机自启（F50）。 */
     async toggleAutostart(enabled: boolean) {
       try {
         await setAutostart(enabled);
         this.autostart = enabled;
         this.error = "";
+      } catch (err) {
+        this.error = err instanceof Error ? err.message : String(err);
+      }
+    },
+    /** 打开下载目录（v3）：失败写入 error 由设置页展示。 */
+    async openDownloadDir() {
+      try {
+        await openDownloadDirApi();
+        this.error = "";
+      } catch (err) {
+        this.error = err instanceof Error ? err.message : String(err);
+      }
+    },
+    /**
+     * 选择下载目录（v3）：弹系统目录选择框，选中后即时保存设置。
+     *
+     * 取消选择时不改动当前值；保存失败写入 error。
+     */
+    async pickDownloadDir() {
+      try {
+        const picked = await pickDownloadDirApi();
+        if (!picked) return;
+        this.settings.downloadDir = picked;
+        await this.save();
       } catch (err) {
         this.error = err instanceof Error ? err.message : String(err);
       }

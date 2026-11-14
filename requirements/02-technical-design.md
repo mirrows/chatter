@@ -47,8 +47,13 @@
 ```
 
 - 启动时：广播 `query`，并每 5 秒广播一次 `announce`（携带 TTL 心跳语义）。
+- **每 10 秒广播一次 `query`**（v2/M9 补充）：Android 的 Wi-Fi 省电策略会过滤**入站广播**
+  （`MulticastLock` 只覆盖组播），只依赖 announce 会让对端被误判离线；周期性 `query`
+  迫使对端用**单播**回应 `announce`（单播不受过滤）。同一轮查询还会对已发现设备逐个**单播**
+  `query`，作为广播收发全被拦截时的兜底。
 - 收到 `query`：单播回应 `announce`。
-- **在线判定**：15 秒未收到某设备任何包则标记离线。
+- **在线判定**：45 秒未收到某设备任何包则标记离线（约 4 个查询周期，容忍广播丢失与短暂休眠）。
+- 主动刷新：前端可在切回前台或发送失败时调用 `refresh_devices`，立即补发 `query + announce`。
 - 多网卡（多 IP）时对每个非环回 IPv4 地址分别广播。
   - **v1 实现现状**：仅向受限广播地址 `255.255.255.255:<发现端口>` 发送（端口跟随配置）。
     按网卡分别广播需要枚举本机地址（如 `if-addrs` 依赖），当前离线构建环境无法引入，
@@ -220,6 +225,7 @@ src/
 | Command | 说明 |
 |---|---|
 | `list_devices` / `add_device_by_ip(addr)` | 设备列表 / 手动按 IP 添加（M4 之后补齐，F3） |
+| `refresh_devices()` | 主动触发一次发现查询（v2/M9：切回前台或发送失败时刷新设备表） |
 | `send_text(peer_id, text)` / `resend(msg_id)` | 文字消息 / 重发（resend 见下） |
 | `send_file(peer_id, path)` | 图片或文件（后端按扩展名区分类型，返回任务快照） |
 | `accept_file(transfer_id)` / `reject_file(transfer_id)` | 接收确认（F34） |
@@ -232,6 +238,8 @@ src/
 | `save_clipboard_image(data_base64, extension)` | 剪贴板图片落盘到缓存目录，返回路径（F21） |
 | `get_settings` / `save_settings` | 设置读取/保存（M4；昵称/端口改动需重启生效） |
 | `get_history(peer_id?)` / `clear_history(peer_id?, delete_files?)` | 历史读取/清空（M4，JSON 存储；`delete_files` 仅删下载目录内记录文件，P1/F41） |
+| `open_download_dir()` | 打开下载目录（v3）：桌面端用文件管理器打开，目录不存在时先创建；Android 返回错误（前端隐藏入口） |
+| `get_history_page(peer_id?, before_ts?, limit?)` | 分页读取历史（v3 向上无限滚动）：消息与传输按时间合并，默认 100 条/页、上限 500，返回 `{ items, hasMore }` |
 | `get_autostart` / `set_autostart(enabled)` | 开机自启查询/设置（M4，F50） |
 
 事件：`device://update`、`message://new`、`transfer://update`、`session://update`（会话连接状态）。
@@ -252,7 +260,17 @@ src/
   `state ∈ pending | offered | transferring | done | failed | cancelled | rejected`，其中 `pending` 表示接收文件等待用户确认。
 - 接收策略：图片（jpg/jpeg/png/gif/webp/bmp）自动接收；其他类型停在 `pending`，前端弹出接受/拒绝。
 - 落盘：写入 `<下载目录>/<transfer_id>.part`，校验通过后改为 `<文件名>`；同名文件已存在时自动改用 `<文件名> (1).<扩展名>`，不覆盖用户文件。
-- 图片预览：`get_image_preview` 返回 `data:image/*;base64,...`（上限 8MB），避免额外资源协议与权限配置；大图预览留待后续用 asset 协议实现。
+- 图片预览：`get_image_preview` 返回 `data:image/*;base64,...`（上限 20MB），避免额外资源协议与权限配置；
+  内存任务表缺失时（应用重启后）回退历史记录取落盘路径（v2/M9 修复），失败原因分为
+  `image not received yet` / `preview file unavailable` / `image too large for preview`，前端据此提示。
+  大图预览留待后续用 asset 协议实现。
+- 平台能力：`get_local_device` 返回 `platform`（`android` / `windows` / `macos` / `linux`），
+  前端据此隐藏平台不支持的操作（如 Android 无「打开所在文件夹」，v2/M9）。
+- 清空语义（v3 修正）：`clear_history(peer_id=None, delete_files=true)` 除删除历史记录指向的文件外，
+  还会**清空下载目录内所有单层普通文件**（不递归、跳过子目录与符号链接、canonical 前缀校验）；
+  指定 `peer_id` 时保持原语义（只删该会话记录里的接收文件）。
+- 传输任务 DTO 增加 `ts`（创建时间 Unix 毫秒，v3）：前端把图片/文件与文字消息按时间混排，
+  历史记录同样使用该时间戳而非推送时间。
 
 ## 9. 风险与对策
 

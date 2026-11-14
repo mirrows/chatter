@@ -7,20 +7,23 @@
 //! camelCase，避免前端做字段名转换。
 
 use crate::config::AppConfig;
-use crate::discovery::{DeviceEntry, DiscoveryEvent};
+use crate::discovery::{DeviceEntry, DiscoveryEvent, DiscoveryHandle};
 #[cfg(not(target_os = "android"))]
-use crate::platform::shell::{open_command, reveal_command};
+use crate::platform::shell::{open_path, reveal_command};
 use crate::session::{SendStatus, SessionHub};
-use crate::storage::{now_millis, History, HistoryStore, StoredMessage};
-use crate::transfer::{TransferInfo, TransferManager};
+use crate::storage::{now_millis, History, HistoryStore, StoredMessage, StoredTransfer};
+use crate::transfer::{
+    TransferDirection, TransferInfo, TransferKind, TransferManager, TransferState,
+};
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::{Emitter, Manager};
 #[cfg(desktop)]
 use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
-use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_dialog::{DialogExt, FilePath};
 use tokio::sync::RwLock;
 
 /// 设备表变更事件名，前端通过 `listen("device://update")` 订阅。
@@ -117,6 +120,10 @@ pub struct LocalDeviceDto {
     pub tcp_port: u16,
     /// 本机指纹（v2/M10），便于让对方核对。
     pub fingerprint: String,
+    /// 运行平台：`android` | `windows` | `macos` | `linux`。
+    ///
+    /// 前端据此隐藏平台不支持的操作（如 Android 无「打开所在文件夹」）。
+    pub platform: &'static str,
 }
 
 /// 收到的新消息（`message://new` 事件载荷，对应前端 `IncomingMessage`）。
@@ -220,6 +227,8 @@ pub struct TransferDto {
     pub path: Option<String>,
     /// 失败原因。
     pub error: Option<String>,
+    /// 任务创建时间（Unix 毫秒），前端用于与文本消息按时间混排。
+    pub ts: i64,
 }
 
 impl From<&TransferInfo> for TransferDto {
@@ -235,6 +244,7 @@ impl From<&TransferInfo> for TransferDto {
             state: info.state.as_str(),
             path: info.path.clone(),
             error: info.error.clone(),
+            ts: info.ts,
         }
     }
 }
@@ -308,6 +318,8 @@ pub struct AppState {
     pub transfers: TransferManager,
     /// 本地历史（消息 + 传输记录）。
     pub history: HistoryStore,
+    /// 发现服务句柄：发送失败/切回前台时可主动触发重新发现。
+    pub discovery: DiscoveryHandle,
 }
 
 impl AppState {
@@ -318,6 +330,7 @@ impl AppState {
         session: SessionHub,
         transfers: TransferManager,
         history: HistoryStore,
+        discovery: DiscoveryHandle,
     ) -> Self {
         Self {
             config: Arc::new(RwLock::new(config)),
@@ -326,6 +339,7 @@ impl AppState {
             session,
             transfers,
             history,
+            discovery,
         }
     }
 }
@@ -354,6 +368,15 @@ pub async fn list_devices(state: tauri::State<'_, AppState>) -> Result<Vec<Devic
     Ok(state.devices.read().await.clone())
 }
 
+/// 主动触发一次设备重新发现。
+///
+/// 场景（v2/M9）：Android 的 Wi-Fi 省电策略会过滤入站广播，设备可能被判定离线；
+/// 切回前台或发送失败时调用本命令，立即补发 query 而不必等下一个周期。
+#[tauri::command]
+pub fn refresh_devices(state: tauri::State<'_, AppState>) {
+    state.discovery.request_refresh();
+}
+
 /// 获取本机设备信息（昵称、ID、端口），供界面显示（F2）。
 #[tauri::command]
 pub async fn get_local_device(state: tauri::State<'_, AppState>) -> Result<LocalDeviceDto, String> {
@@ -364,6 +387,7 @@ pub async fn get_local_device(state: tauri::State<'_, AppState>) -> Result<Local
         discovery_port: config.discovery_port,
         tcp_port: config.tcp_port,
         fingerprint: fingerprint(&config.device_id),
+        platform: crate::platform::name(),
     })
 }
 
@@ -437,8 +461,9 @@ pub async fn save_settings(
 
     let (restart_required, saved) = {
         let mut config = state.config.write().await;
-        let restart_required = config.nickname != nickname
-            || config.discovery_port != settings.discovery_port
+        // 昵称不需要重启：本机立即生效，其他设备在下次连接/应用重启后自然看到新名称（v3）。
+        // 只有端口改动必须重启才能重新绑定。
+        let restart_required = config.discovery_port != settings.discovery_port
             || config.tcp_port != settings.tcp_port;
         config.nickname = nickname;
         config.discovery_port = settings.discovery_port;
@@ -477,7 +502,126 @@ pub async fn get_history(
     })
 }
 
-/// 清空历史（F40/F41）：`peer_id` 为空时清空全部；`delete_files` 为 true 时删除下载目录内的历史文件。
+/// 历史分页默认与上限（v3：向上无限滚动，默认 100 条/页）。
+pub const DEFAULT_HISTORY_PAGE: u32 = 100;
+/// 单页硬上限，避免前端一次拉取过多记录。
+pub const MAX_HISTORY_PAGE: u32 = 500;
+
+/// 历史时间线条目（消息或传输记录），供分页命令返回。
+///
+/// 标签用 `itemType`（而非 `kind`）：传输记录自身已有 `kind`（image/file）字段，
+/// 复用会与前端联合类型判别冲突。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(
+    tag = "itemType",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum HistoryItem {
+    /// 文字消息。
+    Message(StoredMessage),
+    /// 传输记录。
+    Transfer(StoredTransfer),
+}
+
+/// 历史分页结果（对应前端 `HistoryPage`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryPageDto {
+    /// 按时间升序的条目，最多 `limit` 条。
+    pub items: Vec<HistoryItem>,
+    /// 是否还有更早的记录。
+    pub has_more: bool,
+}
+
+/// 合并消息与传输记录，取「比游标更早」的最新一页（纯函数，便于单元测试）。
+///
+/// `before_ts` 为 None 时取最新的 `limit` 条；返回是否还有更早的记录。
+pub fn page_history(
+    messages: Vec<StoredMessage>,
+    transfers: Vec<StoredTransfer>,
+    before_ts: Option<i64>,
+    limit: usize,
+) -> (Vec<HistoryItem>, bool) {
+    let mut sorted: Vec<(i64, String, HistoryItem)> = Vec::new();
+    for message in messages {
+        if before_ts.is_none_or(|cursor| message.ts < cursor) {
+            sorted.push((
+                message.ts,
+                format!("m-{}", message.msg_id),
+                HistoryItem::Message(message),
+            ));
+        }
+    }
+    for transfer in transfers {
+        if before_ts.is_none_or(|cursor| transfer.ts < cursor) {
+            sorted.push((
+                transfer.ts,
+                format!("t-{}", transfer.transfer_id),
+                HistoryItem::Transfer(transfer),
+            ));
+        }
+    }
+    // 时间升序 + key 兜底，保证同一毫秒内顺序稳定
+    sorted.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+
+    let total = sorted.len();
+    let start = total.saturating_sub(limit);
+    let items = sorted[start..]
+        .iter()
+        .map(|(_, _, item)| item.clone())
+        .collect();
+    (items, start > 0)
+}
+
+/// 分页读取历史（v3）：前端向上滚动时用 `before_ts` 逐页加载。
+#[tauri::command]
+pub async fn get_history_page(
+    state: tauri::State<'_, AppState>,
+    peer_id: Option<String>,
+    before_ts: Option<i64>,
+    limit: Option<u32>,
+) -> Result<HistoryPageDto, String> {
+    let peer = peer_id.as_deref();
+    let messages = state.history.messages_for(peer).await;
+    let transfers = state.history.transfers_for(peer).await;
+    let limit = limit
+        .unwrap_or(DEFAULT_HISTORY_PAGE)
+        .clamp(1, MAX_HISTORY_PAGE) as usize;
+    let (items, has_more) = page_history(messages, transfers, before_ts, limit);
+    Ok(HistoryPageDto { items, has_more })
+}
+
+/// 删除目录内所有「单层普通文件」：不递归、不删子目录、不跟随符号链接。
+///
+/// 用于「清空全部历史 + 删除文件」：历史记录里没有指向的文件也应一并清理，
+/// 避免磁盘残留文件与已清空的记录对不上（v3 需求 7）。目录不存在返回 0。
+pub async fn purge_download_dir(dir: &Path) -> usize {
+    let mut entries = match tokio::fs::read_dir(dir).await {
+        Ok(entries) => entries,
+        Err(_) => return 0,
+    };
+    let mut removed = 0usize;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let is_file = entry
+            .file_type()
+            .await
+            .map(|kind| kind.is_file())
+            .unwrap_or(false);
+        if !is_file {
+            continue;
+        }
+        if tokio::fs::remove_file(entry.path()).await.is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// 清空历史（F40/F41）：`peer_id` 为空时清空全部；`delete_files` 为 true 时删除文件。
+///
+/// - 指定 `peer_id`：只删除该会话记录里的接收文件；
+/// - 清空全部（`peer_id = None`）且 `delete_files`：额外**清空下载目录内所有单层文件**（v3）。
 #[tauri::command]
 pub async fn clear_history(
     state: tauri::State<'_, AppState>,
@@ -498,9 +642,71 @@ pub async fn clear_history(
             .filter_map(|record| record.path)
             .collect();
         removed = delete_files_under(&base, &paths).await;
+        // 清空全部历史时，把下载目录里的其它文件也清掉（子目录保留）。
+        if peer.is_none() {
+            removed += purge_download_dir(&base).await;
+        }
     }
     state.history.clear(peer).await.map_err(|e| e.to_string())?;
     Ok(removed)
+}
+
+/// 选择下载目录（v3）：返回用户选择的绝对路径，取消时返回 `None`。
+///
+/// Android 的文件选择器不提供目录选择，直接返回错误（前端隐藏入口）。
+#[tauri::command]
+pub async fn pick_download_dir(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = app;
+        Err("Android 不支持选择目录".to_string())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.dialog().file().pick_folder(move |picked| {
+            let _ = tx.send(picked);
+        });
+        let picked = rx
+            .await
+            .map_err(|_| "file dialog closed unexpectedly".to_string())?;
+        match picked {
+            Some(FilePath::Path(path)) => Ok(Some(path.to_string_lossy().to_string())),
+            _ => Ok(None),
+        }
+    }
+}
+
+/// 打开下载目录（v3 需求 6）：桌面端用系统文件管理器打开，目录不存在时先创建。
+///
+/// Android 的私有目录无法用文件管理器打开，返回明确错误（前端按平台隐藏入口）。
+#[tauri::command]
+pub async fn open_download_dir(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let dir = {
+        let config = state.config.read().await;
+        config.download_dir.trim().to_string()
+    };
+    if dir.is_empty() {
+        return Err("下载目录未设置".to_string());
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = dir;
+        Err("Android 不支持打开下载文件夹".to_string())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let path = PathBuf::from(&dir);
+        tokio::fs::create_dir_all(&path)
+            .await
+            .map_err(|e| e.to_string())?;
+        // 打开外壳属于阻塞操作，放到阻塞线程池，避免占用异步运行时（v3）。
+        tauri::async_runtime::spawn_blocking(move || open_path(&path))
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
 }
 
 /// 是否已开启开机自启（F50）。
@@ -545,27 +751,69 @@ pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String>
 /// 建连必须用 `tcp_port` 重新组合，否则会连到错误的端口。
 pub fn peer_tcp_addr(device: &DeviceDto) -> Option<SocketAddr> {
     let (ip, _) = device.addr.rsplit_once(':')?;
-    let ip: IpAddr = ip
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .parse()
-        .ok()?;
+    let ip = ip.trim_start_matches('[').trim_end_matches(']');
+    // IPv6 链路本地地址可能带 zone id（`fe80::1%3`），`IpAddr` 不接受该后缀。
+    let ip_text = ip.split('%').next().unwrap_or(ip);
+    let ip: IpAddr = ip_text.parse().ok()?;
     Some(SocketAddr::new(ip, device.tcp_port))
 }
 
+/// 在设备表里按 device_id 解析 TCP 地址（纯函数，便于单元测试）。
+pub fn resolve_device_addr(devices: &[DeviceDto], peer_id: &str) -> Option<SocketAddr> {
+    devices
+        .iter()
+        .find(|d| d.device_id == peer_id)
+        .and_then(peer_tcp_addr)
+}
+
+/// 触发重新发现后，等待对端单播回应的时长。
+const REDISCOVER_WAIT: Duration = Duration::from_millis(600);
+
+/// 解析发送目标：发现表优先，其次会话层记录的「上次成功握手地址」。
+async fn lookup_peer_addr(state: &AppState, peer_id: &str) -> Option<SocketAddr> {
+    let from_devices = {
+        let devices = state.devices.read().await;
+        resolve_device_addr(&devices, peer_id)
+    };
+    match from_devices {
+        Some(addr) => Some(addr),
+        None => state.session.known_addr(peer_id).await,
+    }
+}
+
 /// 确保与目标设备存在会话（不存在时按发现结果建连），返回实际会话 ID。
+///
+/// 解析顺序（v2/M9 真机问题修复）：
+/// 1. 已有会话；
+/// 2. 发现表里的设备（正常路径）；
+/// 3. 会话层记住的上次握手地址——移动端入站广播被系统过滤、设备被超时移除后，
+///    仍可重连到同一台对端；
+/// 4. 主动触发一次重新发现，等待 `REDISCOVER_WAIT` 后再试 2、3。
 async fn ensure_session(state: &AppState, peer_id: &str) -> Result<String, String> {
     if state.session.is_connected(peer_id).await {
         return Ok(peer_id.to_string());
     }
-    let target = {
-        let devices = state.devices.read().await;
-        devices
-            .iter()
-            .find(|d| d.device_id == peer_id)
-            .and_then(peer_tcp_addr)
+
+    let mut target = lookup_peer_addr(state, peer_id).await;
+    if target.is_none() {
+        state.discovery.request_refresh();
+        tokio::time::sleep(REDISCOVER_WAIT).await;
+        target = lookup_peer_addr(state, peer_id).await;
+    }
+
+    let Some(target) = target else {
+        let ids: Vec<String> = {
+            let devices = state.devices.read().await;
+            devices.iter().map(|d| d.device_id.clone()).collect()
+        };
+        // 只记录 ID，不输出消息内容或文件路径（rules.md R5.1）。
+        log::warn!(
+            "peer not found: peer_id={peer_id} discovered={} ids={ids:?}",
+            ids.len()
+        );
+        return Err(format!("peer not found: {peer_id}"));
     };
-    let target = target.ok_or_else(|| format!("peer not found: {peer_id}"))?;
+
     let peer = state
         .session
         .connect(target)
@@ -695,31 +943,86 @@ pub async fn list_transfers(state: tauri::State<'_, AppState>) -> Result<Vec<Tra
     Ok(items.iter().map(TransferDto::from).collect())
 }
 
+/// 图片预览来源（纯逻辑，便于单元测试）。
+///
+/// 优先使用当前运行内的任务快照；重启后内存任务表为空，回退到历史记录
+/// （v2/M9 真机问题：Windows 上重启后历史图片预览一直不可用）。
+/// 错误字符串会原样返回前端，用于区分「未接收完成 / 记录缺失 / 文件丢失 / 过大」。
+pub fn preview_source(
+    running: Option<&TransferInfo>,
+    source: Option<&str>,
+    stored: Option<&StoredTransfer>,
+) -> Result<(String, TransferKind), String> {
+    if let Some(info) = running {
+        if let Some(path) = info.path.clone() {
+            return Ok((path, info.kind));
+        }
+        // 发送方向：源文件就在本地，随时可预览，不必等对端接收完成（v2/M9）。
+        if info.direction == TransferDirection::Send {
+            if let Some(path) = source {
+                return Ok((path.to_string(), info.kind));
+            }
+        }
+        if info.state != TransferState::Done {
+            return Err("image not received yet".to_string());
+        }
+    }
+
+    let Some(record) = stored else {
+        return Err("unknown transfer".to_string());
+    };
+    if record.state != "done" {
+        return Err("image not received yet".to_string());
+    }
+    // 接收方向用落盘路径；发送方向回退到历史里记录的源文件（v3：重进会话后可预览）。
+    let path = record.path.clone().or_else(|| record.source_path.clone());
+    let Some(path) = path else {
+        return Err("image not received yet".to_string());
+    };
+    Ok((path, TransferKind::from_path(Path::new(&record.filename))))
+}
+
 /// 读取已接收图片为 data URL，供聊天窗内直接预览（F23）。
 ///
-/// M3-a 采用 base64 内联以避开额外的资源协议与权限配置；超过 8MB 的图片
-/// 不内联预览（后续里程碑可改用 asset 协议流式预览）。
+/// 采用 base64 内联以避开额外的资源协议与权限配置；超过 20MB 不内联预览
+/// （大图请用「打开文件」查看，后续可用 asset 协议流式预览）。
 #[tauri::command]
 pub async fn get_image_preview(
     state: tauri::State<'_, AppState>,
     transfer_id: String,
 ) -> Result<String, String> {
     const MAX_PREVIEW_BYTES: u64 = 20 * 1024 * 1024;
-    let info = state
-        .transfers
-        .get(&transfer_id)
-        .await
-        .ok_or_else(|| format!("unknown transfer: {transfer_id}"))?;
-    let path = info
-        .path
-        .ok_or_else(|| "image not received yet".to_string())?;
-    let metadata = tokio::fs::metadata(&path)
-        .await
-        .map_err(|e| e.to_string())?;
+
+    let running = state.transfers.get(&transfer_id).await;
+    let source = state.transfers.source_path(&transfer_id).await;
+    let stored = state.history.find_transfer(&transfer_id).await;
+    let (path, kind) = preview_source(running.as_ref(), source.as_deref(), stored.as_ref())
+        .map_err(|reason| {
+            log::warn!("image preview unavailable: transfer_id={transfer_id} reason={reason}");
+            reason
+        })?;
+
+    if kind != TransferKind::Image {
+        log::warn!("image preview rejected: transfer_id={transfer_id} kind=file");
+        return Err("not an image".to_string());
+    }
+
+    let metadata = tokio::fs::metadata(&path).await.map_err(|e| {
+        log::warn!("image preview file missing: transfer_id={transfer_id} error={e}");
+        "preview file unavailable".to_string()
+    })?;
     if metadata.len() > MAX_PREVIEW_BYTES {
+        log::warn!(
+            "image preview too large: transfer_id={transfer_id} bytes={}",
+            metadata.len()
+        );
         return Err("image too large for preview".to_string());
     }
-    let bytes = tokio::fs::read(&path).await.map_err(|e| e.to_string())?;
+
+    let bytes = tokio::fs::read(&path).await.map_err(|e| {
+        log::warn!("image preview read failed: transfer_id={transfer_id} error={e}");
+        "preview file unavailable".to_string()
+    })?;
     Ok(format!(
         "data:{};base64,{}",
         image_mime(Path::new(&path)),
@@ -741,12 +1044,30 @@ pub async fn pick_file(app: tauri::AppHandle, images_only: bool) -> Result<Optio
     let picked = rx
         .await
         .map_err(|_| "file dialog closed unexpectedly".to_string())?;
-    match picked {
-        Some(file) => {
-            let path: PathBuf = file.into_path().map_err(|e| e.to_string())?;
-            Ok(Some(path.to_string_lossy().to_string()))
+    let Some(file) = picked else {
+        return Ok(None);
+    };
+    match file {
+        FilePath::Path(path) => Ok(Some(path.to_string_lossy().to_string())),
+        // Android 的文件选择器只返回 `content://` Uri，Rust 读不了：
+        // 交给 Kotlin 复制到应用缓存目录后再按普通路径发送（v2/M9 真机问题）。
+        FilePath::Url(url) => {
+            #[cfg(target_os = "android")]
+            {
+                let uri = url.to_string();
+                let path = tauri::async_runtime::spawn_blocking(move || {
+                    crate::platform::android::import_file(&uri)
+                })
+                .await
+                .map_err(|e| e.to_string())??;
+                Ok(Some(path))
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                let _ = url;
+                Err("unsupported file path".to_string())
+            }
         }
-        None => Ok(None),
     }
 }
 
@@ -932,28 +1253,74 @@ pub fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// 解析已完成传输的落盘路径（F23）。
-async fn received_file_path(state: &AppState, transfer_id: &str) -> Result<PathBuf, String> {
-    let info = state
-        .transfers
-        .get(transfer_id)
-        .await
-        .ok_or_else(|| format!("unknown transfer: {transfer_id}"))?;
-    let raw = info.path.ok_or_else(|| "文件尚未接收完成".to_string())?;
+/// 从内存任务与历史记录中挑选可打开的本地路径（v3；纯函数便于单测）。
+///
+/// - 接收方向用落盘路径；
+/// - 发送方向优先内存里的源路径（本次运行内发送的），再退回历史的 `source_path`；
+/// - 内存里没有该任务（应用重启后从历史加载）时按历史记录的方向取值。
+///
+/// 返回 `None` 表示没有任何可用路径（例如尚未接收完成）。
+fn pick_local_path(
+    direction: Option<TransferDirection>,
+    live_path: Option<String>,
+    memory_source: Option<String>,
+    stored: Option<&StoredTransfer>,
+) -> Option<String> {
+    match direction {
+        Some(TransferDirection::Receive) => live_path,
+        Some(TransferDirection::Send) => {
+            memory_source.or_else(|| stored.and_then(|s| s.source_path.clone()))
+        }
+        None => match stored {
+            Some(s) if s.direction == "send" => s.source_path.clone(),
+            Some(s) => s.path.clone(),
+            None => None,
+        },
+    }
+}
+
+/// 解析「打开 / 定位 / 另存为」要用的本地文件路径（v3）。
+///
+/// 内存任务优先（本次运行），其次历史记录（重启后仍能找回自己发出的文件）；
+/// 源文件被移动/删除时返回 `file unavailable`，由前端按方向给出不同提示。
+async fn transfer_local_path(state: &AppState, transfer_id: &str) -> Result<PathBuf, String> {
+    let info = state.transfers.get(transfer_id).await;
+    let direction = info.as_ref().map(|item| item.direction);
+    let live_path = info.and_then(|item| item.path);
+    let memory_source = if direction == Some(TransferDirection::Send) {
+        state.transfers.source_path(transfer_id).await
+    } else {
+        None
+    };
+    let stored = state.history.find_transfer(transfer_id).await;
+    let known = direction.is_some() || stored.is_some();
+
+    let raw =
+        pick_local_path(direction, live_path, memory_source, stored.as_ref()).ok_or_else(|| {
+            if known {
+                "file not available".to_string()
+            } else {
+                format!("unknown transfer: {transfer_id}")
+            }
+        })?;
+
     let path = PathBuf::from(raw);
     if !path.is_file() {
-        return Err("文件不存在或已被移动".to_string());
+        return Err("file unavailable".to_string());
     }
     Ok(path)
 }
 
-/// 用默认程序打开已接收的文件（F23）。
+/// 用默认程序打开已完成的传输文件（F23 / v3）。
+///
+/// 发送方打开本地源文件（随时可找回自己发出的文件），接收方打开落盘文件；
+/// 源文件被移动或删除时返回 `file unavailable`，由前端按方向提示。
 #[tauri::command]
 pub async fn open_transfer_file(
     state: tauri::State<'_, AppState>,
     transfer_id: String,
 ) -> Result<(), String> {
-    let path = received_file_path(&state, &transfer_id).await?;
+    let path = transfer_local_path(&state, &transfer_id).await?;
 
     // Android（M9）：没有 xdg-open，改用 FileProvider + ACTION_VIEW 拉起系统查看器。
     #[cfg(target_os = "android")]
@@ -969,9 +1336,10 @@ pub async fn open_transfer_file(
 
     #[cfg(not(target_os = "android"))]
     {
-        open_command(&path)
-            .spawn()
-            .map(|_| ())
+        // 打开外壳属于阻塞操作，放到阻塞线程池，避免占用异步运行时（v3）。
+        tauri::async_runtime::spawn_blocking(move || open_path(&path))
+            .await
+            .map_err(|e| format!("无法打开文件：{e}"))?
             .map_err(|e| format!("无法打开文件：{e}"))
     }
 }
@@ -982,7 +1350,7 @@ pub async fn reveal_transfer_file(
     state: tauri::State<'_, AppState>,
     transfer_id: String,
 ) -> Result<(), String> {
-    let path = received_file_path(&state, &transfer_id).await?;
+    let path = transfer_local_path(&state, &transfer_id).await?;
 
     // Android 没有“在文件管理器中定位”的概念，引导用户用另存为导出。
     #[cfg(target_os = "android")]
@@ -1007,7 +1375,7 @@ pub async fn save_transfer_as(
     state: tauri::State<'_, AppState>,
     transfer_id: String,
 ) -> Result<Option<String>, String> {
-    let source = received_file_path(&state, &transfer_id).await?;
+    let source = transfer_local_path(&state, &transfer_id).await?;
     let default_name = source
         .file_name()
         .and_then(|name| name.to_str())
@@ -1077,6 +1445,79 @@ mod tests {
     use super::*;
     use crate::transfer::{TransferDirection, TransferKind, TransferState};
     use std::net::SocketAddr;
+
+    /// 构造一条历史传输记录（v3 路径解析用）。
+    fn stored(direction: &str, path: Option<&str>, source_path: Option<&str>) -> StoredTransfer {
+        StoredTransfer {
+            transfer_id: "t-1".to_string(),
+            peer_id: "peer-1".to_string(),
+            direction: direction.to_string(),
+            kind: "file".to_string(),
+            filename: "report.pdf".to_string(),
+            size: 10,
+            transferred: 10,
+            state: "done".to_string(),
+            path: path.map(|value| value.to_string()),
+            source_path: source_path.map(|value| value.to_string()),
+            ts: 1,
+        }
+    }
+
+    /// 正常路径：接收方向用落盘路径，发送方向优先内存源路径。
+    #[test]
+    fn pick_local_path_prefers_live_task() {
+        assert_eq!(
+            pick_local_path(
+                Some(TransferDirection::Receive),
+                Some("C:/dl/report.pdf".to_string()),
+                None,
+                None
+            ),
+            Some("C:/dl/report.pdf".to_string())
+        );
+        assert_eq!(
+            pick_local_path(
+                Some(TransferDirection::Send),
+                None,
+                Some("C:/src/report.pdf".to_string()),
+                None
+            ),
+            Some("C:/src/report.pdf".to_string())
+        );
+    }
+
+    /// 边界：内存任务没有源路径时退回历史 `source_path`（重启后仍可打开发出的文件）。
+    #[test]
+    fn pick_local_path_falls_back_to_history_source() {
+        let record = stored("send", None, Some("C:/src/old.pdf"));
+        assert_eq!(
+            pick_local_path(Some(TransferDirection::Send), None, None, Some(&record)),
+            Some("C:/src/old.pdf".to_string())
+        );
+    }
+
+    /// 边界：任务不在内存（重启后从历史加载）时按历史方向取值。
+    #[test]
+    fn pick_local_path_uses_history_when_task_absent() {
+        let send = stored("send", None, Some("C:/src/sent.pdf"));
+        let receive = stored("receive", Some("C:/dl/got.pdf"), None);
+        assert_eq!(
+            pick_local_path(None, None, None, Some(&send)),
+            Some("C:/src/sent.pdf".to_string())
+        );
+        assert_eq!(
+            pick_local_path(None, None, None, Some(&receive)),
+            Some("C:/dl/got.pdf".to_string())
+        );
+    }
+
+    /// 异常：既无内存任务也无历史记录（或记录里没有路径）时返回 None。
+    #[test]
+    fn pick_local_path_returns_none_without_paths() {
+        assert_eq!(pick_local_path(None, None, None, None), None);
+        let pending = stored("receive", None, None);
+        assert_eq!(pick_local_path(None, None, None, Some(&pending)), None);
+    }
 
     fn dto(id: &str, name: &str) -> DeviceDto {
         DeviceDto {
@@ -1382,6 +1823,7 @@ mod tests {
             state: TransferState::Transferring,
             path: None,
             error: None,
+            ts: 1_700_000_000_000,
         };
         let json = serde_json::to_string(&TransferDto::from(&info)).unwrap();
         assert!(json.contains("\"transferId\":\"t-1\""));
@@ -1389,5 +1831,336 @@ mod tests {
         assert!(json.contains("\"kind\":\"image\""));
         assert!(json.contains("\"state\":\"transferring\""));
         assert!(json.contains("\"transferred\":4"));
+        assert!(json.contains("\"ts\":1700000000000"));
+    }
+
+    /// 边界：IPv6 方括号与链路本地 zone id 都能解析（否则会退化成 peer not found）。
+    #[test]
+    fn peer_tcp_addr_handles_ipv6() {
+        assert_eq!(
+            peer_tcp_addr(&device("id-2", "[fd00::1]:5000", 28101))
+                .unwrap()
+                .to_string(),
+            "[fd00::1]:28101"
+        );
+        assert_eq!(
+            peer_tcp_addr(&device("id-3", "[fe80::1%3]:5000", 28101))
+                .unwrap()
+                .ip()
+                .to_string(),
+            "fe80::1"
+        );
+    }
+
+    /// 异常：非法地址或缺少端口时返回 None（调用方据此给出 peer not found）。
+    #[test]
+    fn peer_tcp_addr_rejects_malformed() {
+        assert!(peer_tcp_addr(&device("id-4", "not-an-address", 28101)).is_none());
+        assert!(peer_tcp_addr(&device("id-5", "192.168.1.10", 28101)).is_none());
+    }
+
+    /// 正常路径/异常：按 device_id 在设备表里解析地址。
+    #[test]
+    fn resolve_device_addr_matches_device() {
+        let devices = vec![
+            device("id-1", "192.168.1.10:5000", 28101),
+            device("id-2", "192.168.1.11:5000", 28102),
+        ];
+        assert_eq!(
+            resolve_device_addr(&devices, "id-2").unwrap().to_string(),
+            "192.168.1.11:28102"
+        );
+        assert!(resolve_device_addr(&devices, "missing").is_none());
+    }
+
+    /// 正常路径：内存任务已完成时直接取落盘路径。
+    #[test]
+    fn preview_source_prefers_running_task() {
+        let running = preview_task(
+            TransferDirection::Receive,
+            TransferState::Done,
+            Some("C:/dl/photo.png"),
+            TransferKind::Image,
+        );
+        let (path, kind) = preview_source(Some(&running), None, None).unwrap();
+        assert_eq!(path, "C:/dl/photo.png");
+        assert_eq!(kind, TransferKind::Image);
+    }
+
+    /// 正常路径：发送方向用本地源文件，传输未完成也能预览（v2/M9 真机问题）。
+    #[test]
+    fn preview_source_uses_source_for_send() {
+        let sending = preview_task(
+            TransferDirection::Send,
+            TransferState::Transferring,
+            None,
+            TransferKind::Image,
+        );
+        let (path, kind) = preview_source(Some(&sending), Some("C:/pics/a.png"), None).unwrap();
+        assert_eq!(path, "C:/pics/a.png");
+        assert_eq!(kind, TransferKind::Image);
+
+        // 发送任务缺少源路径（例如重启后）时仍按「未接收完成」处理。
+        assert_eq!(
+            preview_source(Some(&sending), None, None).unwrap_err(),
+            "image not received yet"
+        );
+    }
+
+    /// 正常路径：发送方向的历史记录用 `source_path` 预览（v3：重进会话后图片不再加载失败）。
+    #[test]
+    fn preview_source_uses_stored_source_path_for_send() {
+        let mut record = stored_preview("done", None, "sent.png");
+        record.direction = "send".to_string();
+        record.source_path = Some("C:/pics/sent.png".to_string());
+
+        let (path, kind) = preview_source(None, None, Some(&record)).unwrap();
+        assert_eq!(path, "C:/pics/sent.png");
+        assert_eq!(kind, TransferKind::Image);
+    }
+
+    /// 异常：接收完成但既无落盘路径也无源路径时仍报「未接收完成」。
+    #[test]
+    fn preview_source_requires_some_path() {
+        let record = stored_preview("done", None, "x.png");
+        assert_eq!(
+            preview_source(None, None, Some(&record)).unwrap_err(),
+            "image not received yet"
+        );
+    }
+
+    /// 正常路径：重启后内存任务表为空，回退历史记录（F23 真机问题修复）。
+    #[test]
+    fn preview_source_falls_back_to_history() {
+        let stored = stored_preview("done", Some("C:/dl/old.jpg"), "old.jpg");
+        let (path, kind) = preview_source(None, None, Some(&stored)).unwrap();
+        assert_eq!(path, "C:/dl/old.jpg");
+        assert_eq!(kind, TransferKind::Image);
+    }
+
+    /// 异常：未接收完成 / 记录缺失 / 历史状态非 done 都给出可区分的原因。
+    #[test]
+    fn preview_source_reports_reasons() {
+        let transferring = preview_task(
+            TransferDirection::Receive,
+            TransferState::Transferring,
+            None,
+            TransferKind::Image,
+        );
+        assert_eq!(
+            preview_source(Some(&transferring), None, None).unwrap_err(),
+            "image not received yet"
+        );
+
+        assert_eq!(
+            preview_source(None, None, None).unwrap_err(),
+            "unknown transfer"
+        );
+
+        let failed = stored_preview("failed", Some("C:/dl/x.png"), "x.png");
+        assert_eq!(
+            preview_source(None, None, Some(&failed)).unwrap_err(),
+            "image not received yet"
+        );
+
+        let no_path = stored_preview("done", None, "x.png");
+        assert_eq!(
+            preview_source(None, None, Some(&no_path)).unwrap_err(),
+            "image not received yet"
+        );
+    }
+
+    /// 构造一条历史消息（测试辅助）。
+    fn stored_message(id: &str, ts: i64) -> StoredMessage {
+        StoredMessage {
+            msg_id: id.to_string(),
+            peer_id: "peer-1".to_string(),
+            direction: "in".to_string(),
+            text: format!("msg {id}"),
+            ts,
+            status: "delivered".to_string(),
+        }
+    }
+
+    /// 构造一条历史传输记录（测试辅助）。
+    fn stored_transfer(id: &str, ts: i64) -> StoredTransfer {
+        StoredTransfer {
+            transfer_id: id.to_string(),
+            peer_id: "peer-1".to_string(),
+            direction: "receive".to_string(),
+            kind: "image".to_string(),
+            filename: format!("{id}.png"),
+            size: 1,
+            transferred: 1,
+            state: "done".to_string(),
+            path: Some(format!("C:/dl/{id}.png")),
+            source_path: None,
+            ts,
+        }
+    }
+
+    /// 正常路径：不带游标返回最新一页，按时间升序，并标记还有更早记录。
+    #[test]
+    fn page_history_returns_latest_page() {
+        let messages: Vec<StoredMessage> = (1..=5_i64)
+            .map(|i| stored_message(&format!("m{i}"), i))
+            .collect();
+        let (items, has_more) = page_history(messages, Vec::new(), None, 3);
+
+        assert_eq!(items.len(), 3);
+        assert!(has_more);
+        let ids: Vec<String> = items
+            .iter()
+            .map(|item| match item {
+                HistoryItem::Message(message) => message.msg_id.clone(),
+                HistoryItem::Transfer(transfer) => transfer.transfer_id.clone(),
+            })
+            .collect();
+        assert_eq!(ids, vec!["m3", "m4", "m5"]);
+    }
+
+    /// 正常路径：消息与传输按时间合并排序（同一时间戳用 key 兜底）。
+    #[test]
+    fn page_history_merges_messages_and_transfers() {
+        let messages = vec![stored_message("m1", 10), stored_message("m2", 30)];
+        let transfers = vec![stored_transfer("t1", 20)];
+        let (items, has_more) = page_history(messages, transfers, None, 10);
+
+        assert!(!has_more);
+        let order: Vec<String> = items
+            .iter()
+            .map(|item| match item {
+                HistoryItem::Message(message) => message.msg_id.clone(),
+                HistoryItem::Transfer(transfer) => transfer.transfer_id.clone(),
+            })
+            .collect();
+        assert_eq!(order, vec!["m1", "t1", "m2"]);
+    }
+
+    /// 正常路径：用最老时间戳作游标翻页，不重复、不遗漏。
+    #[test]
+    fn page_history_uses_cursor_without_overlap() {
+        let messages: Vec<StoredMessage> = (1..=6_i64)
+            .map(|i| stored_message(&format!("m{i}"), i))
+            .collect();
+
+        let (newest, has_more) = page_history(messages.clone(), Vec::new(), None, 2);
+        assert!(has_more);
+        let oldest_ts = match &newest[0] {
+            HistoryItem::Message(message) => message.ts,
+            HistoryItem::Transfer(transfer) => transfer.ts,
+        };
+
+        let (older, has_more_older) = page_history(messages, Vec::new(), Some(oldest_ts), 2);
+        assert!(has_more_older);
+        match (&older[0], &older[1]) {
+            (HistoryItem::Message(a), HistoryItem::Message(b)) => {
+                assert_eq!(a.msg_id, "m3");
+                assert_eq!(b.msg_id, "m4");
+            }
+            other => panic!("unexpected items: {other:?}"),
+        }
+    }
+
+    /// 边界：记录数不超过一页时 has_more 为 false；空历史返回空页。
+    #[test]
+    fn page_history_reports_end_of_history() {
+        let (items, has_more) = page_history(
+            vec![stored_message("m1", 1)],
+            Vec::new(),
+            None,
+            DEFAULT_HISTORY_PAGE as usize,
+        );
+        assert_eq!(items.len(), 1);
+        assert!(!has_more);
+
+        let (empty, no_more) = page_history(Vec::new(), Vec::new(), None, 100);
+        assert!(empty.is_empty());
+        assert!(!no_more);
+    }
+
+    /// 异常：游标早于所有记录时返回空页且无更早记录。
+    #[test]
+    fn page_history_before_earliest_returns_empty() {
+        let (items, has_more) =
+            page_history(vec![stored_message("m1", 100)], Vec::new(), Some(1), 10);
+        assert!(items.is_empty());
+        assert!(!has_more);
+    }
+
+    /// 正常路径：清空下载目录只删单层普通文件，子目录内容保留（v3 需求 7）。
+    #[tokio::test]
+    async fn purge_download_dir_removes_files_only() {
+        let root = std::env::temp_dir().join("chatters_purge_test");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        std::fs::write(root.join("b.png"), b"y").unwrap();
+        std::fs::write(root.join("sub/keep.txt"), b"z").unwrap();
+
+        let removed = purge_download_dir(&root).await;
+
+        assert_eq!(removed, 2);
+        assert!(!root.join("a.txt").exists());
+        assert!(!root.join("b.png").exists());
+        assert!(root.join("sub/keep.txt").exists(), "子目录内容必须保留");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 异常：下载目录不存在时返回 0，不 panic。
+    #[tokio::test]
+    async fn purge_download_dir_missing_returns_zero() {
+        let missing = std::env::temp_dir().join("chatters_no_such_download_dir");
+        assert_eq!(purge_download_dir(&missing).await, 0);
+    }
+
+    /// 构造一条设备 DTO（测试辅助）。
+    fn device(id: &str, addr: &str, tcp_port: u16) -> DeviceDto {
+        DeviceDto {
+            device_id: id.to_string(),
+            name: format!("PC-{id}"),
+            addr: addr.to_string(),
+            tcp_port,
+            fingerprint: fingerprint(id),
+        }
+    }
+
+    /// 构造一条内存中的传输快照（测试辅助）。
+    fn preview_task(
+        direction: TransferDirection,
+        state: TransferState,
+        path: Option<&str>,
+        kind: TransferKind,
+    ) -> TransferInfo {
+        TransferInfo {
+            transfer_id: "t-1".to_string(),
+            peer_id: "peer-1".to_string(),
+            direction,
+            kind,
+            filename: "photo.png".to_string(),
+            size: 10,
+            transferred: 10,
+            state,
+            path: path.map(|p| p.to_string()),
+            error: None,
+            ts: 1,
+        }
+    }
+
+    /// 构造一条历史传输记录（测试辅助）。
+    fn stored_preview(state: &str, path: Option<&str>, filename: &str) -> StoredTransfer {
+        StoredTransfer {
+            transfer_id: "t-1".to_string(),
+            peer_id: "peer-1".to_string(),
+            direction: "receive".to_string(),
+            kind: "image".to_string(),
+            filename: filename.to_string(),
+            size: 10,
+            transferred: 10,
+            state: state.to_string(),
+            path: path.map(|p| p.to_string()),
+            source_path: None,
+            ts: 1,
+        }
     }
 }
