@@ -347,7 +347,10 @@ impl HubInner {
             | FrameType::FileCancel
             | FrameType::FileChunk
             | FrameType::FileDone
-            | FrameType::FileResult => {
+            | FrameType::FileResult
+            | FrameType::FileBlockMap
+            | FrameType::FileHave
+            | FrameType::FileResumeState => {
                 let _ = self
                     .events
                     .send(SessionEvent::TransferFrame {

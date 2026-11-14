@@ -31,7 +31,7 @@
 
 | 阶段 | 内容 | 交付物 | 预估 |
 |---|---|---|---|
-| S1 协议与位图地基 | `FILE_BLOCK_MAP` / `FILE_HAVE` / 块表编解码（每块 SHA-256 前 8 字节）；`transfer/chunkmap.rs`：位图读写（原子落盘 + CRC32）、`missing_blocks()`、由 `.part` + 块表重建 | 协议编解码单测（含长度上限/非法输入）、位图单测；**暂不声明 `chunkmap`** | 2–3 人日 |
+| S1 协议与位图地基（✅ 2026-11-14 已完成） | `FILE_BLOCK_MAP` / `FILE_HAVE` / `FILE_RESUME_STATE` 帧与 payload；`transfer/chunkmap.rs`：块表（流式计算 + 帧互转）、块位图（置位/缺失/hex）、CRC32、位图原子落盘与校验加载 | 协议往返 + 块表/位图 9 个单测；**`chunkmap` 未声明**，现有流程不变 | 已完成 |
 | S2 发送端 | 双方声明 `chunkmap` 时：OFFER 后发 BLOCK_MAP（流式计算块哈希）→ 收 HAVE → 只发缺失块（`seek`）→ DONE 后按结果有限次补发 | `sender.rs` 新分支 + 与 v1 偏移续传并存 | 2–3 人日 |
 | S3 接收端 | ACCEPT 后回 HAVE（读位图）；`on_chunk` 改随机写 + 块哈希校验 + 位图更新（每 32 块/5s 落盘）；DONE 校验位图全满 + 整文件 SHA-256；失败分类 `missing_blocks` / `block_hash_mismatch` / `file_hash_mismatch`；清理规则（成功删位图、取消/拒绝/失败删 `.part`+`.bitmap`、断线保留） | `receiver.rs` + 位图集成测试（乱序/重复/损坏块） | 2–3 人日 |
 | S4 协商与验收 | `LOCAL_FEATURES` 加入 `chunkmap`；兼容矩阵回归（v2↔v2 / v2↔v1 四种组合）；断线 + 重启续传集成测试；1GB 真机断网续传验收；出包 | 测试 + APK/exe + `16`/`17` 记录 | 2–3 人日 |

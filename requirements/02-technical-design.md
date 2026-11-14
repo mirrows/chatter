@@ -143,6 +143,11 @@ magic = "CHTRS"（5 字节，与发现协议 magic 一致）；帧头共 10B；l
 7. **降级**：对端未声明 `chunkmap` → 使用 v1 字节偏移续传（`FILE_ACCEPT.resume_offset`），其余流程不变。
 8. **清理**：成功删位图并改名；取消/拒绝/校验失败删 `.part` + `.bitmap`；超时/断线保留两者。
 
+> **实现进度（2026-11-14，S1 已完成）**：`protocol.rs` 已加入 `FILE_BLOCK_MAP(0x17)` / `FILE_HAVE(0x18)` /
+> `FILE_RESUME_STATE(0x19)` 与对应 payload 结构；`transfer/chunkmap.rs` 提供块表（流式计算、帧互转）、
+> 块位图（置位/缺失/十六进制互转）、CRC32 与位图原子落盘/校验加载。**`chunkmap` 能力尚未声明**，
+> 现有传输仍走 v1 偏移续传；S2（发送端）/ S3（接收端）/ S4（协商与验收）见 `17-v3-followups.md` §2.2.1。
+
 ### 4.8 版本与能力协商（v2 / M10）
 
 - `HELLO` 的 JSON 增加可选字段 **`features: string[]`**；旧端无该字段时按空数组处理（serde 默认），因此**协议 `ver` 保持 1**。

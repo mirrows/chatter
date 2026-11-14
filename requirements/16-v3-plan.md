@@ -478,3 +478,16 @@ message({ type: "success" | "error" | "info", text: string, duration = 1500 }): 
 - **门禁**：`npm run test` **228 passed（26 文件）**（新增 retry 幂等 / 重复消息去重 2 例，改写原 retry 用例）；`cargo test` lib **110**（新增 `find_message`、`resend_target` 正常/异常 3 例）+ 集成 22；`clippy`/`fmt`/`lint`/`vue-tsc`/`prettier` 全绿。
 - **兼容性**：TEXT 帧本就携带 `msg_id`，协议 `ver` 不变；旧对端收到同 msg_id 的重复 TEXT 时按既有 `append_message` upsert 处理（不会重复落库）。
 
+
+### I6.12 · M11 S1：块级续传地基（2026-11-14）
+
+| # | 项 | 实现 |
+|---|---|---|
+| 1 | 协议帧 | `protocol.rs` 新增 `FILE_BLOCK_MAP(0x17)` / `FILE_HAVE(0x18)` / `FILE_RESUME_STATE(0x19)` 与 `FileBlockMap` / `FileHave` / `FileResumeState` payload（snake_case，与既有帧一致）；`FileBlockMap::block_count/hash_at` |
+| 2 | 块表与位图 | 新增 `transfer/chunkmap.rs`：`ChunkMap`（流式 `from_reader`、`to_frame/from_frame`、块大小与哈希长度校验）、`BlockBitmap`（置位/统计/缺失/hex 互转/尾部填充位清零）、`crc32`（编译期查表，无新依赖） |
+| 3 | 位图落盘 | `.bitmap` 格式 `magic "CBM1" + 块数 + 长度 + 位图 + crc32`，`save_bitmap` 走「临时文件 + 改名」，`load_bitmap` 校验 magic/块数/长度/CRC（失败返回分类错误，供 S3 回退重建） |
+| 4 | 兼容性 | **不声明 `chunkmap`**：现有传输仍走 v1 偏移续传；`transfer::handle_frame` 对三个新帧先忽略，避免未启用时影响旧流程 |
+
+- **门禁**：`cargo test` lib **119**（+9：帧类型往返、块表 hash_at/JSON、CRC32 参考值、位图置位/缺失/hex/填充位、位图落盘-加载/损坏分类、块表流式构建与帧互转、非法输入）+ 集成 22；`clippy -D warnings` 0、`fmt` 0。
+- **下一步**：S2 发送端（BLOCK_MAP → HAVE → 只发缺失块）→ S3 接收端（随机写 + 位图 + 完整性判定）→ S4 协商与真机验收（见 `17-v3-followups.md` §2.2.1）。
+

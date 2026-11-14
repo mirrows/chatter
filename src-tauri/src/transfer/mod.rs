@@ -6,6 +6,7 @@
 //! - 数据以 1MB 块经同一 TCP 连接传输，写入 `.part` 临时文件；
 //! - FILE_DONE 后接收端比对 sha256，一致才改名为正式文件并回 FILE_RESULT。
 
+pub mod chunkmap;
 pub mod receiver;
 pub mod sender;
 
@@ -808,6 +809,8 @@ impl TransferManager {
                 }
                 Ok(())
             }
+            // 块级续传帧（M11）：能力未声明时不会收到；S1 阶段先忽略，S2/S3 接入发送与接收流程。
+            FrameType::FileBlockMap | FrameType::FileHave | FrameType::FileResumeState => Ok(()),
             FrameType::FileCancel => {
                 let cancel: FileCancel = frame.parse_json()?;
                 let notify = {

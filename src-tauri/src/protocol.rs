@@ -42,6 +42,12 @@ pub enum FrameType {
     FileDone = 0x15,
     /// 校验结果。
     FileResult = 0x16,
+    /// 块表（M11：每块哈希前 8 字节，v3/后续启用）。
+    FileBlockMap = 0x17,
+    /// 已收到块位图（M11：接收方回传缺失情况）。
+    FileHave = 0x18,
+    /// 续传状态（M11：重连后恢复位图/偏移）。
+    FileResumeState = 0x19,
     /// 心跳（单次通知，收到后不回应，见设计文档 4.2）。
     Heartbeat = 0x1F,
 }
@@ -60,6 +66,9 @@ impl FrameType {
             0x14 => Some(FrameType::FileChunk),
             0x15 => Some(FrameType::FileDone),
             0x16 => Some(FrameType::FileResult),
+            0x17 => Some(FrameType::FileBlockMap),
+            0x18 => Some(FrameType::FileHave),
+            0x19 => Some(FrameType::FileResumeState),
             0x1F => Some(FrameType::Heartbeat),
             _ => None,
         }
@@ -354,6 +363,63 @@ pub struct FileResult {
     pub path: Option<String>,
 }
 
+/// 每块哈希的十六进制长度（SHA-256 前 8 字节 → 16 个字符）。
+pub const BLOCK_HASH_HEX_LEN: usize = 16;
+
+/// FILE_BLOCK_MAP payload（M11）：块表，`hashes` 为连续十六进制串。
+///
+/// 结构校验（块大小、哈希串长度、十六进制字符）由 `transfer::chunkmap` 负责，
+/// 协议层只做 JSON 编解码，保持与其它帧一致。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileBlockMap {
+    /// 传输任务 ID。
+    pub transfer_id: String,
+    /// 协商后的块大小（字节）。
+    pub block_size: u32,
+    /// 连续十六进制块哈希，每 `BLOCK_HASH_HEX_LEN` 个字符对应一块。
+    pub hashes: String,
+}
+
+impl FileBlockMap {
+    /// 块数量（按哈希串长度推导；不含非法长度校验）。
+    pub fn block_count(&self) -> usize {
+        self.hashes.len() / BLOCK_HASH_HEX_LEN
+    }
+
+    /// 第 `index` 块的哈希（8 字节）；越界或非法十六进制返回 None。
+    pub fn hash_at(&self, index: usize) -> Option<[u8; 8]> {
+        let start = index.checked_mul(BLOCK_HASH_HEX_LEN)?;
+        let end = start.checked_add(BLOCK_HASH_HEX_LEN)?;
+        let slice = self.hashes.get(start..end)?;
+        let mut out = [0u8; 8];
+        for (i, chunk) in slice.as_bytes().chunks(2).enumerate() {
+            let text = std::str::from_utf8(chunk).ok()?;
+            out[i] = u8::from_str_radix(text, 16).ok()?;
+        }
+        Some(out)
+    }
+}
+
+/// FILE_HAVE payload（M11）：接收方已收到的块位图（十六进制，位序 = 块索引）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileHave {
+    /// 传输任务 ID。
+    pub transfer_id: String,
+    /// 十六进制位图。
+    pub bitmap: String,
+}
+
+/// FILE_RESUME_STATE payload（M11）：重连后恢复位图与已收字节。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileResumeState {
+    /// 传输任务 ID。
+    pub transfer_id: String,
+    /// 十六进制位图。
+    pub bitmap: String,
+    /// 已确认收到的字节数（用于降级到偏移续传）。
+    pub received: u64,
+}
+
 /// FILE_CHUNK 头部长度：transfer_id(16B) + seq(4B)。
 pub const CHUNK_HEADER_LEN: usize = 20;
 /// 单块最大数据长度（2MB；帧上限 4MB，含 20B 块头仍安全）。
@@ -623,5 +689,42 @@ mod tests {
             serde_json::to_string(&failed).unwrap(),
             "{\"transfer_id\":\"t-1\",\"ok\":false,\"path\":null}"
         );
+    }
+
+    /// 正常路径：块级续传帧类型（0x17–0x19）可往返转换，且不与已有帧冲突。
+    #[test]
+    fn block_map_frame_types_roundtrip() {
+        for (value, expected) in [
+            (0x17u8, FrameType::FileBlockMap),
+            (0x18, FrameType::FileHave),
+            (0x19, FrameType::FileResumeState),
+        ] {
+            assert_eq!(FrameType::from_u8(value), Some(expected));
+            assert_eq!(expected.as_u8(), value);
+        }
+    }
+
+    /// 正常路径：块表帧的 JSON 与哈希切分（每 16 字符 8 字节）。
+    #[test]
+    fn block_map_payload_hash_at() {
+        let map = FileBlockMap {
+            transfer_id: "t-1".to_string(),
+            block_size: 1024,
+            hashes: format!("{}{}", "0011223344556677", "8899aabbccddeeff"),
+        };
+        assert_eq!(map.block_count(), 2);
+        assert_eq!(
+            map.hash_at(0),
+            Some([0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77])
+        );
+        assert_eq!(
+            map.hash_at(1),
+            Some([0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff])
+        );
+        assert_eq!(map.hash_at(2), None);
+
+        let json = serde_json::to_string(&map).unwrap();
+        assert!(json.contains("\"transfer_id\":\"t-1\""));
+        assert!(json.contains("\"block_size\":1024"));
     }
 }
