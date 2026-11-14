@@ -9,16 +9,12 @@ import {
   refreshDevices,
 } from "../api/tauri";
 import type { DeviceEntry, DeviceUpdate, LocalDevice } from "../api/types";
+import { t } from "../i18n";
 import { handleError } from "../utils/errors";
+import { message } from "./message";
 
 /** 主动重新发现后，等待对端单播应答的时长（毫秒）。 */
 const REFRESH_SETTLE_MS = 200;
-
-/** 设备上下线提示（F4）。 */
-export interface DeviceNotice {
-  kind: "up" | "down";
-  name: string;
-}
 
 /** 设备状态 store。 */
 export const useDeviceStore = defineStore("devices", {
@@ -29,8 +25,6 @@ export const useDeviceStore = defineStore("devices", {
     started: false,
     /** 初始化失败信息（空串表示无错误）。 */
     error: "",
-    /** 最近一次上下线提示（F4，由界面定时清除）。 */
-    notice: null as DeviceNotice | null,
   }),
   getters: {
     /** 在线设备数。 */
@@ -63,29 +57,24 @@ export const useDeviceStore = defineStore("devices", {
       this.local = null;
       this.started = false;
       this.error = "";
-      this.notice = null;
     },
     /** 应用一次后端推送的设备事件（F4）。 */
     applyUpdate(update: DeviceUpdate) {
       if (update.kind === "up") {
         const isNew = !this.devices.some((d) => d.deviceId === update.device.deviceId);
         this.upsert(update.device);
-        // 心跳会周期性重复上报，只有新设备才提示"已上线"。
-        if (isNew) this.notice = { kind: "up", name: update.device.name };
+        // 心跳会周期性重复上报，只有新设备才提示"已上线"；提示统一走 message（v3 / R8.1）。
+        if (isNew) message.success(t("device.notice.up", { name: update.device.name }));
       } else {
         const name =
           this.devices.find((d) => d.deviceId === update.deviceId)?.name ?? update.deviceId;
         this.remove(update.deviceId);
-        this.notice = { kind: "down", name };
+        message.info(t("device.notice.down", { name }));
       }
     },
     /** 立即更新本机显示名（v3 改名：本机实时可见，无需重启）。 */
     setLocalName(name: string) {
       if (this.local) this.local = { ...this.local, name };
-    },
-    /** 清除上下线提示（界面 3 秒后调用）。 */
-    clearNotice() {
-      this.notice = null;
     },
     /** 手动按 IP 添加设备（F3）；成功返回 true。 */
     async addByIp(addr: string): Promise<boolean> {

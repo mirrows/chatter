@@ -40,13 +40,6 @@
     </p>
 
     <p v-if="store.error" class="error" data-testid="device-error">{{ store.error }}</p>
-    <p v-if="store.notice" class="notice" data-testid="device-notice">
-      {{
-        store.notice.kind === "up"
-          ? t("device.notice.up", { name: store.notice.name })
-          : t("device.notice.down", { name: store.notice.name })
-      }}
-    </p>
 
     <ul v-if="store.count > 0" class="list" :class="{ 'is-card': isMobile }">
       <li v-for="d in store.devices" :key="d.deviceId" data-testid="device-item">
@@ -86,7 +79,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from "vue";
+import { computed, ref } from "vue";
 import { usePlatform } from "../composables/usePlatform";
 import { t } from "../i18n";
 import type { DeviceEntry } from "../api/types";
@@ -105,7 +98,6 @@ const aliases = usePeerAliasStore();
 const settings = useSettingsStore();
 const { isAndroid } = usePlatform();
 const addrInput = ref("");
-let noticeTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** 移动端用卡片布局（v3 需求 2）。 */
 const isMobile = computed(() => isAndroid.value);
@@ -160,19 +152,7 @@ async function editLocalName() {
   message.success(t("device.editLocalNameSaved"));
 }
 
-// 上下线提示 3 秒后自动消失（F4）。
-watch(
-  () => store.notice,
-  (notice) => {
-    if (noticeTimer) clearTimeout(noticeTimer);
-    if (!notice) return;
-    noticeTimer = setTimeout(() => store.clearNotice(), 3000);
-  },
-);
-
-onUnmounted(() => {
-  if (noticeTimer) clearTimeout(noticeTimer);
-});
+// 上下线提示统一由 devices store 通过 message 组件弹出（v3 / R8.1），此处不再维护计时器。
 
 /** 手动添加设备（F3）。 */
 async function addByIp() {
@@ -299,11 +279,6 @@ h2 {
 .error {
   color: #c2410c;
   font-size: 13px;
-}
-.notice {
-  color: var(--accent);
-  font-size: 13px;
-  margin: 0 0 8px;
 }
 .badge {
   background: var(--accent);

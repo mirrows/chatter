@@ -27,6 +27,7 @@ vi.mock("../../src/api/tauri", () => ({
 import DeviceList from "../../src/views/DeviceList.vue";
 import { useChatStore } from "../../src/stores/chat";
 import { useDeviceStore } from "../../src/stores/devices";
+import { useMessageStore } from "../../src/stores/message";
 
 const peer: DeviceEntry = {
   deviceId: "id-1",
@@ -42,7 +43,6 @@ describe("device add & notice", () => {
     vi.clearAllMocks();
     api.isTauri.mockReturnValue(true);
   });
-
   it("addByIp 成功后加入设备列表并清空错误", async () => {
     api.addDeviceByIp.mockResolvedValue(peer);
     const store = useDeviceStore();
@@ -67,21 +67,25 @@ describe("device add & notice", () => {
     expect(store.error).toBe("连接失败：timeout");
   });
 
-  it("新设备上线提示一次，心跳刷新不再提示", () => {
+  it("新设备上线用 message 提示一次，心跳刷新不再提示（F4 / R8.1）", () => {
     const store = useDeviceStore();
-    store.applyUpdate({ kind: "up", device: peer });
-    expect(store.notice).toEqual({ kind: "up", name: "PC-8f3a" });
+    const messages = useMessageStore();
 
-    store.clearNotice();
+    store.applyUpdate({ kind: "up", device: peer });
+    expect(messages.visible.map((item) => item.text)).toEqual(["PC-8f3a 已上线"]);
+
+    // 心跳重复上报同一设备：不再提示
+    messages.clear();
     store.applyUpdate({ kind: "up", device: { ...peer, name: "PC-8f3a" } });
-    expect(store.notice).toBeNull();
+    expect(messages.visible).toHaveLength(0);
   });
 
-  it("设备下线提示包含昵称", () => {
+  it("设备下线用 message 提示并包含昵称（F4）", () => {
     const store = useDeviceStore();
+    const messages = useMessageStore();
     store.upsert(peer);
     store.applyUpdate({ kind: "down", deviceId: "id-1" });
-    expect(store.notice).toEqual({ kind: "down", name: "PC-8f3a" });
+    expect(messages.visible.map((item) => item.text)).toEqual(["PC-8f3a 已下线"]);
     expect(store.count).toBe(0);
   });
 
@@ -99,11 +103,15 @@ describe("device add & notice", () => {
     expect(wrapper.text()).toContain("PC-8f3a");
   });
 
-  it("上下线提示渲染在设备页", async () => {
+  it("上下线提示走 message 组件，不再内联渲染在设备页（v3）", async () => {
     const store = useDeviceStore();
+    const messages = useMessageStore();
     store.applyUpdate({ kind: "up", device: peer });
     const wrapper = mount(DeviceList);
-    expect(wrapper.get('[data-testid="device-notice"]').text()).toBe("PC-8f3a 已上线");
+    // 设备页不再有内联提示元素
+    expect(wrapper.find('[data-testid="device-notice"]').exists()).toBe(false);
+    // 提示出现在全局 message 队列里
+    expect(messages.visible.map((item) => item.text)).toEqual(["PC-8f3a 已上线"]);
   });
 
   it("未读消息在设备列表显示徽标（F42）", async () => {
