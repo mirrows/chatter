@@ -162,6 +162,39 @@ pub fn bitmap_path_for(part: &Path) -> std::path::PathBuf {
     part.with_extension("bitmap")
 }
 
+/// 按 `.part` 现有内容与块表重建位图（位图缺失/损坏时的兜底）。
+///
+/// 逐块读取并比对短哈希：内容一致即视为已收，避免整文件重传；
+/// 预分配产生的未写区域若恰为全零，也会被判定为一致（最终整文件哈希仍能校验通过）。
+pub fn rebuild_bitmap(path: &Path, map: &ChunkMap, size: u64) -> Result<BlockBitmap, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let block_size = map.block_size() as usize;
+    let blocks = map.block_count();
+    let mut bitmap = BlockBitmap::new(blocks);
+    if blocks == 0 {
+        return Ok(bitmap);
+    }
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let len = file.metadata().map_err(|e| e.to_string())?.len();
+    let mut buf = vec![0u8; block_size];
+    for index in 0..blocks {
+        let offset = index as u64 * block_size as u64;
+        if offset >= len || offset >= size {
+            break;
+        }
+        let want = ((size - offset) as usize).min(block_size);
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|e| e.to_string())?;
+        if file.read_exact(&mut buf[..want]).is_err() {
+            break;
+        }
+        if map.hash_at(index) == Some(block_hash(&buf[..want])) {
+            bitmap.set(index);
+        }
+    }
+    Ok(bitmap)
+}
+
 /// 块位图：位序 = 块索引（低位优先），每 8 块 1 字节。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockBitmap {
@@ -431,6 +464,37 @@ mod tests {
         body[0] = b'X';
         std::fs::write(&path, &body).expect("write");
         assert_eq!(load_bitmap(&path, 10), Err(BitmapError::BadMagic));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 正常路径：位图缺失时按 `.part` 内容与块表重建（只标记内容一致的块）。
+    #[test]
+    fn rebuild_bitmap_from_partial_data() {
+        let root = temp_root("rebuild");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("data.part");
+        // 3 块：4 + 4 + 2 字节，块大小 4。
+        let payload: Vec<u8> = (0..10u8).collect();
+        let mut map = ChunkMap::empty(4).unwrap();
+        for chunk in payload.chunks(4) {
+            map.push_hash(chunk);
+        }
+
+        std::fs::write(&path, &payload).unwrap();
+        let bitmap = rebuild_bitmap(&path, &map, payload.len() as u64).unwrap();
+        assert!(bitmap.all_set(), "完整内容应重建为全满");
+
+        // 只写入前 5 字节（第 0 块完整、第 1 块不完整）：仅第 0 块被标记。
+        std::fs::write(&path, &payload[..5]).unwrap();
+        let bitmap = rebuild_bitmap(&path, &map, payload.len() as u64).unwrap();
+        assert_eq!(bitmap.missing(), vec![1, 2]);
+
+        // 内容与块表不一致：不标记（避免把损坏数据当成已收）。
+        let wrong: Vec<u8> = payload.iter().map(|byte| byte ^ 0xFF).collect();
+        std::fs::write(&path, &wrong).unwrap();
+        let bitmap = rebuild_bitmap(&path, &map, payload.len() as u64).unwrap();
+        assert_eq!(bitmap.missing(), vec![0, 1, 2]);
 
         std::fs::remove_dir_all(&root).ok();
     }

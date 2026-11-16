@@ -519,10 +519,11 @@ message({ type: "success" | "error" | "info", text: string, duration = 1500 }): 
 | 4 | 清理规则 | 成功：删 `.bitmap` + 续传元数据；取消/拒绝：删 `.part` + `.bitmap` + 元数据；校验失败/断线：保留（重试时按位图只补缺失块） |
 | 5 | 测试 | 新增集成：`chunkmap_transfers_multi_block_file`（2.5MB 多块）、`legacy_peer_falls_back_without_chunkmap`（空 features 模拟旧端）；协议 `FileResult.error` 断言更新 |
 
-- **门禁**：`cargo test` lib **121** + 集成 **24**（file_transfer 12 / discovery 5 / text 5 / reconnect 2）；`clippy -D warnings` 0、`fmt` 0；前端未改（`npm run test` 234 基线不变）。
+- **门禁**：`cargo test` lib **122** + 集成 **25**（file_transfer 13 / discovery 5 / text 5 / reconnect 2）；`clippy -D warnings` 0、`fmt` 0；前端未改（`npm run test` 234 基线不变）。
+- **位图重建（2026-11-16 补充）**：`.bitmap` 缺失/损坏时由 `chunkmap::rebuild_bitmap` 按块表逐块比对 `.part` 重建并重新落盘；新增单测 `rebuild_bitmap_from_partial_data` 与集成用例 `chunkmap_rebuilds_missing_bitmap_and_resumes`（无位图 + 只有首块的 `.part` → 只补缺失块并校验通过）。
 - **行为说明**：
   - 接收端回 `missing_blocks:N` 时发送端标记失败并展示分类；用户「重试」会重新 OFFER，接收端加载位图后只补缺失块（自动有限次补发暂未实现）。
-  - 位图损坏/缺失时从零开始（尚未实现按 `.part` 重建）；`.part` 已预分配为 size，重试不受文件长度影响。
+  - 位图损坏/缺失时按 `.part` 内容与块表逐块比对重建（`rebuild_bitmap`）并重新落盘，只重发哈希不符的块；`.part` 已预分配为 size，重试不受文件长度影响。
 - **待办**：1GB 真机断网续传验收、断线重连后的位图续传验证（M11 代码已完成）。
 - **产物（2026-11-16，内嵌 `index-PaQBxUHd.js` / `index-B68X56oA.css`）**：
   - APK：11.48 MB（aligned 11.42 MB），SHA-256 `84E3CF4340666F42E0B92281BAB87AD1630FE63DE333E7CA360FF1B15717C94C`。

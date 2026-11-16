@@ -33,7 +33,7 @@
 |---|---|---|---|
 | S1 协议与位图地基（✅ 2026-11-14 已完成） | `FILE_BLOCK_MAP` / `FILE_HAVE` / `FILE_RESUME_STATE` 帧与 payload；`transfer/chunkmap.rs`：块表（流式计算 + 帧互转）、块位图（置位/缺失/hex）、CRC32、位图原子落盘与校验加载 | 协议往返 + 块表/位图 9 个单测；**`chunkmap` 未声明**，现有流程不变 | 已完成 |
 | S2 发送端（✅ 2026-11-14 已完成） | OFFER 前一次读取同时算整文件 sha256 与块表；ACCEPT 后发 BLOCK_MAP → 等 HAVE（10s 超时按全缺失）→ 只发缺失块（seek）；FILE_RESULT.error 透传 | `sender.rs` 新增分支 + `hash_file_with_blocks` | 已完成 |
-| S3 接收端（✅ 2026-11-14 已完成） | 预分配 `.part`、加载/新建位图并回 HAVE；块哈希校验 + 随机写；位图每 32 块原子落盘；DONE 校验位图全满 + 重算 sha256；失败分类与清理规则 | `receiver.rs` 新增 `on_block_map` / `on_chunk_map` / `on_done_map` | 已完成 |
+| S3 接收端（✅ 2026-11-14 已完成；位图重建 2026-11-16 补充） | 预分配 `.part`、加载/新建位图并回 HAVE（缺失/损坏时按 `.part` 逐块比对重建）；块哈希校验 + 随机写；位图每 32 块原子落盘；DONE 校验位图全满 + 重算 sha256；失败分类与清理规则 | `receiver.rs` 新增 `on_block_map` / `on_chunk_map` / `on_done_map` + `chunkmap::rebuild_bitmap` | 已完成 |
 | S4 协商与验收（✅ 2026-11-14 已完成，真机待验） | `LOCAL_FEATURES` 加 `chunkmap`；旧端（未声明）自动降级；新增多块 + 旧端降级集成用例 | 集成 24（file_transfer 12 / discovery 5 / text 5 / reconnect 2） | 真机 1GB 断网续传待验收 |
 
 > 风险与约束：块大小不一致时丢弃旧块状态；位图损坏时按 `.part` 重建；对端未声明 `chunkmap` 时**必须**回到 v1 偏移续传（现有行为不变）。

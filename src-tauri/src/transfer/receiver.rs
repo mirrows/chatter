@@ -380,9 +380,11 @@ pub(crate) async fn on_block_map(
         )));
     }
 
-    // 预分配 `.part` 并打开随机写句柄；位图缺失/损坏时从零开始。
+    // 预分配 `.part` 并打开随机写句柄；位图缺失/损坏时按块表重建。
     let part_clone = part.clone();
-    let bitmap_path = super::chunkmap::bitmap_path_for(&part_clone);
+    let bitmap_path_load = super::chunkmap::bitmap_path_for(&part_clone);
+    let bitmap_path_save = bitmap_path_load.clone();
+    let map_for_rebuild = chunk_map.clone();
     let (std_file, bitmap) = tokio::task::spawn_blocking(
         move || -> Result<(std::fs::File, super::chunkmap::BlockBitmap), std::io::Error> {
             let file = std::fs::OpenOptions::new()
@@ -392,8 +394,17 @@ pub(crate) async fn on_block_map(
                 .write(true)
                 .open(&part_clone)?;
             file.set_len(size)?;
-            let bitmap = super::chunkmap::load_bitmap(&bitmap_path, blocks)
-                .unwrap_or_else(|_| super::chunkmap::BlockBitmap::new(blocks));
+            let bitmap = match super::chunkmap::load_bitmap(&bitmap_path_load, blocks) {
+                Ok(bitmap) => bitmap,
+                Err(_) => {
+                    // 位图缺失/损坏：按 `.part` 已有内容逐块比对重建，并重新落盘。
+                    let bitmap =
+                        super::chunkmap::rebuild_bitmap(&part_clone, &map_for_rebuild, size)
+                            .unwrap_or_else(|_| super::chunkmap::BlockBitmap::new(blocks));
+                    let _ = super::chunkmap::save_bitmap(&bitmap_path_save, &bitmap);
+                    bitmap
+                }
+            };
             Ok((file, bitmap))
         },
     )

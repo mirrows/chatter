@@ -451,6 +451,57 @@ async fn legacy_peer_falls_back_without_chunkmap() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// 正常路径：位图缺失时按 `.part` 重建，重试只补缺失块并完成校验（M11）。
+#[tokio::test]
+async fn chunkmap_rebuilds_missing_bitmap_and_resumes() {
+    let root = temp_root("resume-map");
+    let dir_a = root.join("a");
+    let dir_b = root.join("b");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
+
+    let (manager_a, _hub_a, port_a) = spawn_node("device-a", "PC-a", dir_a.clone()).await;
+    let (manager_b, hub_b, _port_b) = spawn_node("device-b", "PC-b", dir_b.clone()).await;
+    hub_b.connect(loopback(port_a)).await.expect("connect a");
+
+    // 2.5MB、双方都声明 chunk2m → 2MB 块 → 2 块。
+    let payload: Vec<u8> = (0..(2 * 1024 * 1024 + 512 * 1024))
+        .map(|index| (index % 199) as u8)
+        .collect();
+    let source = dir_b.join("resume-map.bin");
+    std::fs::write(&source, &payload).unwrap();
+
+    // 预置上次中断残留：`.part` 只含第 0 块（2MB），且 **没有** `.bitmap`。
+    let first_block = 2 * 1024 * 1024;
+    let key = partial_key("resume-map.bin", payload.len() as u64);
+    let partial = dir_a.join(".chatters-partial");
+    std::fs::create_dir_all(&partial).unwrap();
+    std::fs::write(partial.join(format!("{key}.part")), &payload[..first_block]).unwrap();
+    let meta = format!(
+        "{{\"filename\":\"resume-map.bin\",\"size\":{},\"sha256\":\"{}\"}}",
+        payload.len(),
+        sha256_hex(&payload)
+    );
+    std::fs::write(partial.join(format!("{key}.json")), meta).unwrap();
+
+    let sent = manager_b
+        .send_file("device-a", &source)
+        .await
+        .expect("send file");
+    wait_state(&manager_a, &sent.transfer_id, TransferState::Pending).await;
+    manager_a
+        .accept(&sent.transfer_id)
+        .await
+        .expect("accept file");
+
+    // 位图缺失 → 接收端按 `.part` 重建（第 0 块命中）→ 只补第 1 块 → 校验通过。
+    let done = wait_state(&manager_a, &sent.transfer_id, TransferState::Done).await;
+    assert_eq!(std::fs::read(done.path.expect("path")).unwrap(), payload);
+    assert!(part_files(&dir_a).is_empty());
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// 正常路径：待确认阶段取消，双方都进入 Cancelled，且不留临时文件（F33）。
 #[tokio::test]
 async fn cancel_before_accept_cancels_both_sides() {
