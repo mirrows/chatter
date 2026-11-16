@@ -493,7 +493,8 @@ fn partial_key(filename: &str, size: u64) -> String {
     hex[..32].to_string()
 }
 
-/// 简版续传（Q8）：命中原有部分文件时返回已收偏移，发送端从该偏移继续，最终校验通过。
+/// 简版续传（Q8，v1 降级路径）：双方未声明 `chunkmap` 时命中原有部分文件返回已收偏移，
+/// 发送端从该偏移继续，最终校验通过。
 #[tokio::test]
 async fn resume_from_partial_file() {
     let root = temp_root("resume");
@@ -502,8 +503,23 @@ async fn resume_from_partial_file() {
     std::fs::create_dir_all(&dir_a).unwrap();
     std::fs::create_dir_all(&dir_b).unwrap();
 
-    let (manager_a, _hub_a, port_a) = spawn_node("device-a", "PC-a", dir_a.clone()).await;
-    let (manager_b, hub_b, _port_b) = spawn_node("device-b", "PC-b", dir_b.clone()).await;
+    // 模拟 v1 端（不声明 chunkmap），验证偏移续传仍然可用。
+    let (manager_a, _hub_a, port_a) = spawn_node_full(
+        "device-a",
+        "PC-a",
+        dir_a.clone(),
+        Duration::from_secs(30),
+        Vec::new(),
+    )
+    .await;
+    let (manager_b, hub_b, _port_b) = spawn_node_full(
+        "device-b",
+        "PC-b",
+        dir_b.clone(),
+        Duration::from_secs(30),
+        Vec::new(),
+    )
+    .await;
     hub_b.connect(loopback(port_a)).await.expect("connect a");
 
     let data = vec![9u8; 2 * 1024 * 1024 + 777];

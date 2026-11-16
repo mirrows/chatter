@@ -525,6 +525,6 @@ message({ type: "success" | "error" | "info", text: string, duration = 1500 }): 
   - 位图损坏/缺失时从零开始（尚未实现按 `.part` 重建）；`.part` 已预分配为 size，重试不受文件长度影响。
 - **待办**：1GB 真机断网续传验收、断线重连后的位图续传验证（M11 代码已完成）。
 - **产物（2026-11-16，内嵌 `index-PaQBxUHd.js` / `index-B68X56oA.css`）**：
-  - APK：11.48 MB（aligned 11.42 MB），SHA-256 `83BE398593120C60480FE35C289B438112C0FA5D51939CFAD1AD051F802A2F65`。
-  - exe：13.58 MB（`target/release/chatters.exe`），SHA-256 `9E56B3DF8277CCF3F4305DF67DF0EDFC14667804ECDA7F021AA4A2FA82BDB3E8`。
+  - APK：11.48 MB（aligned 11.42 MB），SHA-256 `84E3CF4340666F42E0B92281BAB87AD1630FE63DE333E7CA360FF1B15717C94C`。
+  - exe：13.58 MB（`target/release/chatters.exe`），SHA-256 `811174AF77564728C4DEC2D1E872F78F402763DFEA51DE39AA5FCE5301AA76A9`。
 

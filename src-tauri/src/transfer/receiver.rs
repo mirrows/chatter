@@ -114,6 +114,8 @@ pub(crate) async fn on_offer(
     let use_chunkmap = super::chunkmap_enabled(&inner, peer_id).await;
     let final_path = unique_path(&config.download_dir, &filename);
     let (part, meta, resume_from) = prepare_partial(&inner, &filename, &offer).await?;
+    // chunkmap 模式下 `.part` 会被预分配为 size，文件长度不能代表已收进度，进度由位图决定。
+    let resume_from = if use_chunkmap { 0 } else { resume_from };
     let info = TransferInfo {
         transfer_id: offer.transfer_id.clone(),
         peer_id: peer_id.to_string(),
