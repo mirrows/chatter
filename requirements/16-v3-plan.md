@@ -531,8 +531,8 @@ message({ type: "success" | "error" | "info", text: string, duration = 1500 }): 
   - 接收端回 `missing_blocks:N` 时，发送端**自动重发块表并只补缺失块**（最多 2 轮，失败才上报）；接收端在 `Failed` 状态下收到新块表会恢复为 `Transferring`（`file_hash_mismatch` 时重置位图重传）。
   - 位图损坏/缺失时按 `.part` 内容与块表逐块比对重建（`rebuild_bitmap`）并重新落盘，只重发哈希不符的块；`.part` 已预分配为 size，重试不受文件长度影响。
 - **待办**：1GB 真机断网续传验收、断线重连后的位图续传验证（M11 代码已完成）。
-- **产物（2026-11-16 全量包，内嵌 `index-PaQBxUHd.js` / `index-B68X56oA.css`）**：
-  - APK：11.48 MB（aligned 11.42 MB），SHA-256 `725B7C69CB7675A4E62E6538463294151FE9063F8A9CA1EF02A58ACCC3E84C8E`。
-  - exe：13.61 MB（`target/release/chatters.exe`），SHA-256 `ACA82C68C873CC42C3F638C79BA734CED9F1CA26039026F9D9AE86F00B47BBF2`。
-  - NSIS 安装包：3.09 MB（`target/release/bundle/nsis/Chatters_1.0.0-rc.1_x64-setup.exe`，未签名），SHA-256 `B7D8FAC507B76CEBA337A6FFFFCD7329B1BFA8BC9165D3FCA7500D02EE3AB99D`。
+- **产物（2026-11-16 全量验收包，内嵌 `index-CA_t8xbo.js` / `index-B68X56oA.css`）**：
+  - APK：11.61 MB（aligned 11.54 MB），SHA-256 `6053C24320CDE9C6B2115F3A9E43078444E97F66F03589C60B3022E1D7B5D359`。
+  - exe：13.86 MB（`target/release/chatters.exe`），SHA-256 `960BBDBB791666AAB2B09DC6F2D82055B61808D9251CA98A9D5520A9B135B7AA`。
+  - NSIS 安装包：3.14 MB（`target/release/bundle/nsis/Chatters_1.0.0-rc.1_x64-setup.exe`，未签名），SHA-256 `D0ADC159F57786C872AB2FB3A64399689397DD4CAC51041A750357DD24751157`。
 
