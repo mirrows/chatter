@@ -551,3 +551,16 @@ message({ type: "success" | "error" | "info", text: string, duration = 1500 }): 
 - **验证**：无密钥 `gradle assembleArm64Release` 仍产出 `app-arm64-release-unsigned.apk`（回退路径不变）；有密钥产出 `app-arm64-release.apk`，`apksigner verify --print-certs` 指纹与 keystore 一致；脚本输出 `Chatters-1.0.0-rc.1-arm64-release.apk`（11.55 MB，SHA-256 `1D308753…1BEB`）。
 - **注意**：debug 与 release 签名不兼容，首次安装 release 包需先卸载旧 debug 包；keystore 丢失将无法覆盖升级；`versionCode` 建议随发布递增。
 
+
+### I6.16 · CI 自动出包与 GitHub Releases（2026-11-16）
+
+| # | 项 | 实现 |
+|---|---|---|
+| 1 | Release workflow | 新增 `.github/workflows/release.yml`：`workflow_dispatch`（输入 tag）或 `push tags: v*` 触发；`permissions: contents: write` |
+| 2 | Windows | `npx tauri build` 产出 NSIS + exe → 生成 `SHA256SUMS.txt` → 上传 artifact |
+| 3 | Android | 与 CI 相同的 arm64 构建（SDK 36 / NDK 27 / Gradle）；配置 `ANDROID_*` Secrets 时 release 签名，否则回退 debug 签名 → 上传 artifact |
+| 4 | 发布 | `softprops/action-gh-release@v2` 汇总 exe / APK / SHA256SUMS，发布到对应 tag（支持 pre-release、自动生成 release notes） |
+
+- **用法**：`git tag v1.0.0-rc.2; git push origin v1.0.0-rc.2`，或 Actions → Release → Run workflow（填 tag）。
+- **注意**：产物版本号取自 `tauri.conf.json` 的 `version`，发版前需同步递增；`ci.yml` 的 android job 保持手动触发（仅用于快速验证 APK），日常 push 只跑 frontend + rust 三平台。
+

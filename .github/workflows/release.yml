@@ -1,0 +1,162 @@
+name: Release
+
+# 触发方式（二选一）：
+#   1) 打 tag 推送：git tag v1.0.0-rc.2; git push origin v1.0.0-rc.2
+#   2) Actions -> Release -> Run workflow（填写 tag）
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag（如 v1.0.0-rc.2）"
+        required: true
+      prerelease:
+        description: "标记为 pre-release"
+        type: boolean
+        default: true
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: windows (NSIS + exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - name: tauri build（含前端构建 + NSIS）
+        run: npx tauri build
+      - name: 收集安装包与校验值
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item 'src-tauri/target/release/bundle/nsis/*.exe' dist/
+          Copy-Item 'src-tauri/target/release/chatters.exe' dist/
+          $lines = Get-ChildItem dist -File | ForEach-Object {
+            $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+            "{0}  {1}" -f $h, $_.Name
+          }
+          $lines | Set-Content -Encoding ascii dist/SHA256SUMS.txt
+          Get-Content dist/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-packages
+          path: dist/*
+
+  android:
+    name: android (arm64 APK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - uses: android-actions/setup-android@v3
+      - name: 安装 SDK / NDK
+        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "ndk;27.0.12077973"
+      - run: npm ci
+      - run: npm run build
+      - name: cargo build（arm64, custom-protocol）
+        working-directory: src-tauri
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/27.0.12077973"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          cargo build --release --target aarch64-linux-android --features tauri/custom-protocol
+      - name: 复制 .so 到 jniLibs
+        run: |
+          mkdir -p src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a
+          cp src-tauri/target/aarch64-linux-android/release/libchatters_lib.so \
+             src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/
+
+      - name: 还原 release keystore（可选，未配置 Secrets 时自动跳过）
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "release keystore not configured - falls back to the debug keystore"
+            exit 0
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          {
+            echo "CHATTERS_KEYSTORE=$RUNNER_TEMP/release.jks"
+            echo "CHATTERS_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD"
+            echo "CHATTERS_KEY_ALIAS=${ANDROID_KEY_ALIAS:-chatters}"
+            echo "CHATTERS_KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+      - name: Gradle assembleArm64Release
+        working-directory: src-tauri/gen/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleArm64Release -x rustBuildArm64Release --console=plain
+
+      - name: 收集并校验 APK
+        run: |
+          BT="$ANDROID_HOME/build-tools/36.0.0"
+          mkdir -p dist
+          GRADLE_SIGNED="src-tauri/gen/android/app/build/outputs/apk/arm64/release/app-arm64-release.apk"
+          if [ -f "$GRADLE_SIGNED" ]; then
+            cp "$GRADLE_SIGNED" "dist/Chatters-arm64-release.apk"
+            APK="dist/Chatters-arm64-release.apk"
+          else
+            UNSIGNED="src-tauri/gen/android/app/build/outputs/apk/arm64/release/app-arm64-release-unsigned.apk"
+            "$BT/zipalign" -p -f 4 "$UNSIGNED" dist/Chatters-arm64-aligned.apk
+            keytool -genkeypair -keystore "$RUNNER_TEMP/debug.keystore" -storepass android \
+              -alias androiddebugkey -keypass android -dname "CN=Android Debug,O=Android,C=US" \
+              -keyalg RSA -keysize 2048 -validity 10000
+            "$BT/apksigner" sign --ks "$RUNNER_TEMP/debug.keystore" --ks-pass pass:android \
+              --key-pass pass:android --out dist/Chatters-arm64-debugsigned.apk \
+              dist/Chatters-arm64-aligned.apk
+            APK="dist/Chatters-arm64-debugsigned.apk"
+          fi
+          "$BT/apksigner" verify --verbose --print-certs "$APK"
+          (cd dist && sha256sum *.apk | tee -a SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-package
+          path: dist/*
+
+  publish:
+    name: publish release
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: 汇总产物
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name '*.exe' -o -name '*.apk' -o -name 'SHA256SUMS.txt' \) -exec cp {} release/ \;
+          ls -l release
+      - name: 发布到 GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: Chatters ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ inputs.prerelease || false }}
+          generate_release_notes: true
+          files: release/*
