@@ -317,6 +317,8 @@ pub(crate) struct Task {
     pub(crate) blocks_since_flush: usize,
     /// 发送端等待接收方位图（FILE_HAVE）。
     pub(crate) have_tx: Option<oneshot::Sender<BlockBitmap>>,
+    /// 是否已在重连后自动重试过（避免循环重试）。
+    pub(crate) auto_retried: bool,
 }
 
 /// 传输中心：任务表 + 帧路由。
@@ -664,6 +666,7 @@ impl TransferManager {
                     chunk_file: None,
                     blocks_since_flush: 0,
                     have_tx: None,
+                    auto_retried: false,
                 },
             );
         }
@@ -815,6 +818,42 @@ impl TransferManager {
                 }
             }
         });
+    }
+
+    /// 重连成功后自动重试一次因断线失败的发送任务（M11 / `17` §2.4）。
+    ///
+    /// 只处理「发送方向 + Failed + 错误为连接断开 + 尚未自动重试」的任务；
+    /// 重试会创建新任务（新 transfer_id），旧任务保留可重试状态供用户查看。
+    pub async fn handle_peer_connected(&self, peer_id: &str) {
+        let candidates: Vec<(String, PathBuf)> = {
+            let mut tasks = self.inner.tasks.lock().await;
+            tasks
+                .values_mut()
+                .filter(|task| {
+                    task.info.direction == TransferDirection::Send
+                        && task.info.state == TransferState::Failed
+                        && !task.auto_retried
+                        && task.info.peer_id == peer_id
+                        && task
+                            .info
+                            .error
+                            .as_deref()
+                            .map(|reason| reason.contains("连接已断开"))
+                            .unwrap_or(false)
+                })
+                .filter_map(|task| {
+                    let source = task.source.clone()?;
+                    task.auto_retried = true;
+                    Some((task.info.transfer_id.clone(), source))
+                })
+                .collect()
+        };
+        for (old_id, source) in candidates {
+            log::info!("auto retry transfer {old_id} after reconnect");
+            if let Err(e) = self.send_file(peer_id, &source).await {
+                log::warn!("auto retry failed for {old_id}: {e}");
+            }
+        }
     }
 
     /// 对端断线时把相关未完成任务标记为失败（保留 `.part` 以便续传）。

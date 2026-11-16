@@ -401,6 +401,12 @@ pub fn run() -> Result<(), tauri::Error> {
                         SessionEvent::PeerConnected {
                             device_id, name, ..
                         } => {
+                            // 重连成功：自动重试一次因断线失败的发送任务（M11）。
+                            let retry_router = transfer_router.clone();
+                            let retry_peer = device_id.clone();
+                            tauri::async_runtime::spawn(async move {
+                                retry_router.handle_peer_connected(&retry_peer).await;
+                            });
                             let update = SessionUpdate::Connected {
                                 peer_id: device_id,
                                 name,

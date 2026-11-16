@@ -14,6 +14,9 @@ use tokio::time::timeout;
 /// 等待接收方回传 FILE_HAVE 的超时（超时按"全量缺失"处理，保证兼容）。
 const HAVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// DONE 因缺失块失败后自动补发的最大轮数（M11）。
+const MAX_RESEND_ROUNDS: usize = 2;
+
 /// 后台发送流程：握手确认 → 分块 → FILE_DONE → 等待校验结果。
 pub(crate) async fn run(
     inner: Arc<Inner>,
@@ -87,104 +90,128 @@ pub(crate) async fn run(
         (task.use_chunkmap, task.chunk_map.clone())
     };
 
-    let mut file = tokio::fs::File::open(&source).await?;
-    let mut buf = vec![0u8; chunk_size];
-    let mut sent = offset;
-
-    let mut bitmap = None;
-    if use_chunkmap {
-        if let Some(map) = chunk_map {
-            bitmap =
-                Some(send_block_map_and_wait_have(&inner, &transfer_id, &peer_id, &map).await?);
-        }
-    }
-
-    if let Some(bitmap) = bitmap {
-        // 只发送位图中缺失的块（seq = 块索引）。
-        for index in bitmap.missing() {
-            if cancel.load(Ordering::Relaxed) {
-                return cancelled(inner, &transfer_id).await;
-            }
-            let block_offset = index as u64 * chunk_size as u64;
-            if block_offset >= size {
-                break;
-            }
-            let want = ((size - block_offset) as usize).min(chunk_size);
-            file.seek(std::io::SeekFrom::Start(block_offset)).await?;
-            let read = file.read(&mut buf[..want]).await?;
-            if read == 0 {
-                break;
-            }
-            let payload = encode_chunk(&uuid, index as u32, &buf[..read])?;
-            if let Err(e) = inner
-                .send(&peer_id, Frame::new(FrameType::FileChunk, payload))
-                .await
-            {
-                return fail(inner, &transfer_id, format!("发送数据块失败：{e}")).await;
-            }
-            inner.touch(&transfer_id).await;
-            inner.advance(&transfer_id, read as u64, false).await;
-        }
+    // M11：块级续传模式下，DONE 若因缺失块失败，自动补发（最多 2 轮）。
+    let max_rounds = if use_chunkmap && chunk_map.is_some() {
+        MAX_RESEND_ROUNDS
     } else {
-        if offset > 0 {
-            file.seek(std::io::SeekFrom::Start(offset)).await?;
+        0
+    };
+    let mut first_round = true;
+    for round in 0..=max_rounds {
+        if cancel.load(Ordering::Relaxed) {
+            return cancelled(inner, &transfer_id).await;
         }
-        while sent < size {
-            if cancel.load(Ordering::Relaxed) {
-                return cancelled(inner, &transfer_id).await;
-            }
-            let remaining = (size - sent) as usize;
-            let want = remaining.min(chunk_size);
-            let read = file.read(&mut buf[..want]).await?;
-            if read == 0 {
-                break;
-            }
-            let payload = encode_chunk(&uuid, chunk_seq_with(sent, chunk_size), &buf[..read])?;
-            if let Err(e) = inner
-                .send(&peer_id, Frame::new(FrameType::FileChunk, payload))
-                .await
-            {
-                return fail(inner, &transfer_id, format!("发送数据块失败：{e}")).await;
-            }
-            sent += read as u64;
-            inner.touch(&transfer_id).await;
-            inner.advance(&transfer_id, read as u64, false).await;
-        }
-    }
+        let mut file = tokio::fs::File::open(&source).await?;
+        let mut buf = vec![0u8; chunk_size];
 
-    // 先登记结果等待者，再发 FILE_DONE，避免对端回执早于登记。
-    let (result_tx, result_rx) = oneshot::channel::<FileResult>();
-    {
-        let mut tasks = inner.tasks.lock().await;
-        if let Some(task) = tasks.get_mut(&transfer_id) {
-            task.result_tx = Some(result_tx);
+        if first_round && !use_chunkmap {
+            // v1：从偏移处顺序发送（原逻辑）。
+            let mut sent = offset;
+            if offset > 0 {
+                file.seek(std::io::SeekFrom::Start(offset)).await?;
+            }
+            while sent < size {
+                if cancel.load(Ordering::Relaxed) {
+                    return cancelled(inner, &transfer_id).await;
+                }
+                let remaining = (size - sent) as usize;
+                let want = remaining.min(chunk_size);
+                let read = file.read(&mut buf[..want]).await?;
+                if read == 0 {
+                    break;
+                }
+                let payload = encode_chunk(&uuid, chunk_seq_with(sent, chunk_size), &buf[..read])?;
+                if let Err(e) = inner
+                    .send(&peer_id, Frame::new(FrameType::FileChunk, payload))
+                    .await
+                {
+                    return fail(inner, &transfer_id, format!("发送数据块失败：{e}")).await;
+                }
+                sent += read as u64;
+                inner.touch(&transfer_id).await;
+                inner.advance(&transfer_id, read as u64, false).await;
+            }
+        } else if let Some(map) = &chunk_map {
+            // chunkmap：每轮按接收端位图只发缺失块（首轮与补发轮同一逻辑）。
+            let bitmap = send_block_map_and_wait_have(&inner, &transfer_id, &peer_id, map).await?;
+            let missing = bitmap.missing();
+            if round > 0 {
+                log::info!(
+                    "transfer {transfer_id} resend round {round}: {} missing blocks",
+                    missing.len()
+                );
+            }
+            for index in missing {
+                if cancel.load(Ordering::Relaxed) {
+                    return cancelled(inner, &transfer_id).await;
+                }
+                let block_offset = index as u64 * chunk_size as u64;
+                if block_offset >= size {
+                    break;
+                }
+                let want = ((size - block_offset) as usize).min(chunk_size);
+                file.seek(std::io::SeekFrom::Start(block_offset)).await?;
+                let read = file.read(&mut buf[..want]).await?;
+                if read == 0 {
+                    break;
+                }
+                let payload = encode_chunk(&uuid, index as u32, &buf[..read])?;
+                if let Err(e) = inner
+                    .send(&peer_id, Frame::new(FrameType::FileChunk, payload))
+                    .await
+                {
+                    return fail(inner, &transfer_id, format!("发送数据块失败：{e}")).await;
+                }
+                inner.touch(&transfer_id).await;
+                inner.advance(&transfer_id, read as u64, false).await;
+            }
         }
-    }
-    let done = Frame::json(
-        FrameType::FileDone,
-        &FileDone {
-            transfer_id: transfer_id.clone(),
-            sha256: expected_sha256,
-        },
-    )?;
-    if let Err(e) = inner.send(&peer_id, done).await {
-        return fail(inner, &transfer_id, format!("发送结束帧失败：{e}")).await;
-    }
+        first_round = false;
 
-    match timeout(RESULT_TIMEOUT, result_rx).await {
-        Ok(Ok(result)) if result.ok => {
+        // 先登记结果等待者，再发 FILE_DONE，避免对端回执早于登记。
+        let (result_tx, result_rx) = oneshot::channel::<FileResult>();
+        {
+            let mut tasks = inner.tasks.lock().await;
+            if let Some(task) = tasks.get_mut(&transfer_id) {
+                task.result_tx = Some(result_tx);
+            }
+        }
+        let done = Frame::json(
+            FrameType::FileDone,
+            &FileDone {
+                transfer_id: transfer_id.clone(),
+                sha256: expected_sha256.clone(),
+            },
+        )?;
+        if let Err(e) = inner.send(&peer_id, done).await {
+            return fail(inner, &transfer_id, format!("发送结束帧失败：{e}")).await;
+        }
+
+        let result = match timeout(RESULT_TIMEOUT, result_rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => {
+                return fail(inner, &transfer_id, "接收端未返回校验结果".to_string()).await
+            }
+            Err(_) => return fail(inner, &transfer_id, "等待校验结果超时".to_string()).await,
+        };
+        if result.ok {
             inner.mark(&transfer_id, TransferState::Done, None).await;
             inner.advance(&transfer_id, 0, true).await;
-            Ok(())
+            return Ok(());
         }
-        Ok(Ok(result)) => {
-            // M11：优先使用接收端给出的失败分类（missing_blocks / file_hash_mismatch）。
-            let reason = result.error.unwrap_or_else(|| "接收端校验失败".to_string());
-            fail(inner, &transfer_id, reason).await
+
+        // M11：缺失块在补发轮次内自动重试；其余失败（如整文件哈希不符）直接上报。
+        let reason = result.error.unwrap_or_else(|| "接收端校验失败".to_string());
+        if reason.starts_with("missing_blocks") && round < max_rounds {
+            log::warn!(
+                "transfer {transfer_id} round {round} failed: {reason}; retry missing blocks"
+            );
+            continue;
         }
-        Ok(Err(_)) => fail(inner, &transfer_id, "接收端未返回校验结果".to_string()).await,
-        Err(_) => fail(inner, &transfer_id, "等待校验结果超时".to_string()).await,
+        return fail(inner, &transfer_id, reason).await;
     }
+
+    fail(inner, &transfer_id, "传输未完成".to_string()).await
 }
 
 /// 发送 BLOCK_MAP 并等待接收方 FILE_HAVE；超时按"全部缺失"处理（保证降级可用）。

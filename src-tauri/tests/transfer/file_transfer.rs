@@ -14,6 +14,7 @@ use chatters_lib::protocol::{
 use chatters_lib::session::{
     start_session, SessionConfig, SessionEvent, SessionHub, LOCAL_FEATURES,
 };
+use chatters_lib::transfer::chunkmap::ChunkMap;
 use chatters_lib::transfer::{
     TransferConfig, TransferError, TransferEvent, TransferInfo, TransferKind, TransferManager,
     TransferState,
@@ -498,6 +499,143 @@ async fn chunkmap_rebuilds_missing_bitmap_and_resumes() {
     let done = wait_state(&manager_a, &sent.transfer_id, TransferState::Done).await;
     assert_eq!(std::fs::read(done.path.expect("path")).unwrap(), payload);
     assert!(part_files(&dir_a).is_empty());
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// 正常路径：接收端缺块失败后，收到新块表可恢复并补齐（发送端自动补发的接收侧）。
+#[tokio::test]
+async fn receiver_recovers_from_missing_blocks_on_new_block_map() {
+    let root = temp_root("resume-recover");
+    let dir_a = root.join("a");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    let (manager_a, _hub_a, port_a) = spawn_node("device-a", "PC-a", dir_a.clone()).await;
+    let (_manager_b, hub_b, _port_b) = spawn_node("device-b", "PC-b", root.join("b")).await;
+    hub_b.connect(loopback(port_a)).await.expect("connect a");
+
+    // 2.5MB → 2MB 块 → 2 块。
+    let payload: Vec<u8> = (0..(2 * 1024 * 1024 + 512 * 1024))
+        .map(|index| (index % 173) as u8)
+        .collect();
+    let block_size = 2 * 1024 * 1024usize;
+    let mut map = ChunkMap::empty(block_size as u32).unwrap();
+    for chunk in payload.chunks(block_size) {
+        map.push_hash(chunk);
+    }
+
+    let transfer_id = uuid::Uuid::new_v4().to_string();
+    let offer = FileOffer {
+        transfer_id: transfer_id.clone(),
+        kind: FileKind::Image,
+        filename: "recover.png".to_string(),
+        size: payload.len() as u64,
+        sha256: sha256_hex(&payload),
+    };
+    hub_b
+        .send_frame(
+            "device-a",
+            Frame::json(FrameType::FileOffer, &offer).unwrap(),
+        )
+        .await
+        .expect("send offer");
+    wait_state(&manager_a, &transfer_id, TransferState::Transferring).await;
+
+    let uuid = uuid::Uuid::parse_str(&transfer_id).unwrap();
+    // 只发第 0 块 + DONE → 接收端缺 1 块。
+    hub_b
+        .send_frame(
+            "device-a",
+            Frame::json(FrameType::FileBlockMap, &map.to_frame(&transfer_id)).unwrap(),
+        )
+        .await
+        .expect("send block map");
+    hub_b
+        .send_frame(
+            "device-a",
+            Frame::new(
+                FrameType::FileChunk,
+                encode_chunk(&uuid, 0, &payload[..block_size]).unwrap(),
+            ),
+        )
+        .await
+        .expect("send chunk 0");
+    hub_b
+        .send_frame(
+            "device-a",
+            Frame::json(
+                FrameType::FileDone,
+                &FileDone {
+                    transfer_id: transfer_id.clone(),
+                    sha256: sha256_hex(&payload),
+                },
+            )
+            .unwrap(),
+        )
+        .await
+        .expect("send done 1");
+
+    let failed = wait_state(&manager_a, &transfer_id, TransferState::Failed).await;
+    assert!(
+        failed
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("missing_blocks"),
+        "error={:?}",
+        failed.error
+    );
+    // 缺块失败保留 `.part` + `.bitmap`（在 `.chatters-partial` 子目录内）。
+    let partial_dir = dir_a.join(".chatters-partial");
+    let kept: Vec<PathBuf> = std::fs::read_dir(&partial_dir)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.path())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        kept.iter()
+            .any(|path| path.extension().and_then(|ext| ext.to_str()) == Some("part")),
+        "缺块失败应保留 .part 以便续传"
+    );
+
+    // 重发块表 → 恢复 Transferring → 只补第 1 块 → 完成。
+    hub_b
+        .send_frame(
+            "device-a",
+            Frame::json(FrameType::FileBlockMap, &map.to_frame(&transfer_id)).unwrap(),
+        )
+        .await
+        .expect("send block map again");
+    wait_state(&manager_a, &transfer_id, TransferState::Transferring).await;
+    hub_b
+        .send_frame(
+            "device-a",
+            Frame::new(
+                FrameType::FileChunk,
+                encode_chunk(&uuid, 1, &payload[block_size..]).unwrap(),
+            ),
+        )
+        .await
+        .expect("send chunk 1");
+    hub_b
+        .send_frame(
+            "device-a",
+            Frame::json(
+                FrameType::FileDone,
+                &FileDone {
+                    transfer_id: transfer_id.clone(),
+                    sha256: sha256_hex(&payload),
+                },
+            )
+            .unwrap(),
+        )
+        .await
+        .expect("send done 2");
+
+    let done = wait_state(&manager_a, &transfer_id, TransferState::Done).await;
+    assert_eq!(std::fs::read(done.path.expect("path")).unwrap(), payload);
 
     std::fs::remove_dir_all(&root).ok();
 }

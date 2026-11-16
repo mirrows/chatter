@@ -164,6 +164,7 @@ pub(crate) async fn on_offer(
                 chunk_file: None,
                 blocks_since_flush: 0,
                 have_tx: None,
+                auto_retried: false,
             },
         );
     }
@@ -345,7 +346,7 @@ pub(crate) async fn on_block_map(
     map: FileBlockMap,
 ) -> Result<(), TransferError> {
     let transfer_id = map.transfer_id.clone();
-    let (peer_id, part, size, block_size, use_chunkmap) = {
+    let (peer_id, part, size, block_size, use_chunkmap, state, error) = {
         let tasks = inner.tasks.lock().await;
         let task = tasks
             .get(&transfer_id)
@@ -358,12 +359,27 @@ pub(crate) async fn on_block_map(
             task.info.size,
             task.block_size,
             task.use_chunkmap,
+            task.info.state,
+            task.info.error.clone(),
         )
     };
     if !use_chunkmap {
         // 未启用块级续传：忽略（对端可能误发）。
         return Ok(());
     }
+    // M11：允许在 Failed 状态下恢复（发送端自动补发缺失块时重发块表）。
+    if !matches!(state, TransferState::Transferring | TransferState::Failed) {
+        return Err(TransferError::InvalidState(format!(
+            "block map in state {}",
+            state.as_str()
+        )));
+    }
+    // 上次因整文件哈希不符失败时位图不可信（可能全满但内容错误）→ 重置重传。
+    let reset_bitmap = state == TransferState::Failed
+        && !error
+            .as_deref()
+            .map(|reason| reason.starts_with("missing_blocks"))
+            .unwrap_or(false);
 
     let chunk_map = super::chunkmap::ChunkMap::from_frame(&map)
         .map_err(|e| TransferError::InvalidState(format!("bad block map: {e}")))?;
@@ -394,15 +410,22 @@ pub(crate) async fn on_block_map(
                 .write(true)
                 .open(&part_clone)?;
             file.set_len(size)?;
-            let bitmap = match super::chunkmap::load_bitmap(&bitmap_path_load, blocks) {
-                Ok(bitmap) => bitmap,
-                Err(_) => {
-                    // 位图缺失/损坏：按 `.part` 已有内容逐块比对重建，并重新落盘。
-                    let bitmap =
-                        super::chunkmap::rebuild_bitmap(&part_clone, &map_for_rebuild, size)
-                            .unwrap_or_else(|_| super::chunkmap::BlockBitmap::new(blocks));
-                    let _ = super::chunkmap::save_bitmap(&bitmap_path_save, &bitmap);
-                    bitmap
+            let bitmap = if reset_bitmap {
+                // 位图不可信：清空并覆盖落盘，让发送端重传全部块。
+                let bitmap = super::chunkmap::BlockBitmap::new(blocks);
+                let _ = super::chunkmap::save_bitmap(&bitmap_path_save, &bitmap);
+                bitmap
+            } else {
+                match super::chunkmap::load_bitmap(&bitmap_path_load, blocks) {
+                    Ok(bitmap) => bitmap,
+                    Err(_) => {
+                        // 位图缺失/损坏：按 `.part` 已有内容逐块比对重建，并重新落盘。
+                        let bitmap =
+                            super::chunkmap::rebuild_bitmap(&part_clone, &map_for_rebuild, size)
+                                .unwrap_or_else(|_| super::chunkmap::BlockBitmap::new(blocks));
+                        let _ = super::chunkmap::save_bitmap(&bitmap_path_save, &bitmap);
+                        bitmap
+                    }
                 }
             };
             Ok((file, bitmap))
@@ -420,6 +443,12 @@ pub(crate) async fn on_block_map(
         task.chunk_file = Some(Arc::new(std::sync::Mutex::new(std_file)));
         task.bitmap = Some(bitmap.clone());
         task.info.transferred = (bitmap.received() as u64 * block_size as u64).min(size);
+    }
+    // Failed → Transferring 的恢复路径：清掉上次错误并通知界面。
+    if state == TransferState::Failed {
+        inner
+            .mark(&transfer_id, TransferState::Transferring, None)
+            .await;
     }
 
     let frame = Frame::json(
