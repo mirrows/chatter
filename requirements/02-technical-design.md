@@ -373,3 +373,10 @@ platform/
 
 - 阶段性允许**未签名** EXE / dmg / APK；发布说明必须标注 SmartScreen、Gatekeeper、Android 未知来源提示；
 - 证书到位后补签：Windows（Authenticode）、macOS（Developer ID + notarytool）、Android（keystore）。
+- **Android release 签名（v3，2026-11-16 已接入）**：
+  - keystore 由维护者本地生成（PKCS12 / RSA 4096 / 10000 天 / alias `chatters`），**不入库**（已忽略 `*.jks`、`*.keystore`、`*.pfx`、`keystore.properties`、`.secrets/`）；
+  - 本地构建：设置 `CHATTERS_KEYSTORE`、`CHATTERS_KEYSTORE_PASSWORD`、`CHATTERS_KEY_ALIAS`、`CHATTERS_KEY_PASSWORD` 后执行 `tools/build-android-arm64.ps1` → Gradle 产出已签名 APK（`Chatters-<ver>-arm64-release.apk`）；未设置时回退 debug 签名（仅侧载）；
+  - CI：`ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD` 四个 Secrets；未配置时 android job 自动回退 debug 签名；
+  - 证书 SHA-256 指纹（核对安装包来源）：`CF:B3:42:48:2A:65:E9:9D:E2:B5:02:47:0D:B5:B1:E3:E5:89:FF:15:D8:16:81:64:C7:B6:E2:A5:8E:4D:F6:BC`；
+  - debug 与 release 签名不兼容：首次安装 release 包需先卸载旧 debug 包；keystore 丢失将无法覆盖升级。
+- Windows Authenticode：仍为可选（未签名交付，SmartScreen 提示需在发布说明中告知）；免费开源方案（SignPath / Certum）待申请后接入。

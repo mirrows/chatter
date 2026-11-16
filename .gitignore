@@ -15,3 +15,10 @@ dist/
 
 # Tauri 生成物（tauri-build 每次构建时按当前依赖重建；gen/android 是源码工程，必须入库）
 src-tauri/gen/schemas/
+
+# 签名材料（v3，绝不入库）
+*.jks
+*.keystore
+*.pfx
+keystore.properties
+.secrets/

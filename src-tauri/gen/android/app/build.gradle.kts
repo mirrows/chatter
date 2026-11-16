@@ -18,6 +18,19 @@ android {
     // M9 spike：本机 SDK 只装到 android-36（37 尚未在官方仓库发布），故固定 36。
     compileSdk = 36
     namespace = "com.chatters.app"
+    signingConfigs {
+        create("release") {
+            // v3：release keystore 从环境变量读取；未配置时保持未签名，
+            // 由 tools/build-android-arm64.ps1 回退到 debug 签名（仅侧载）。
+            val keystorePath = System.getenv("CHATTERS_KEYSTORE")
+            if (!keystorePath.isNullOrBlank() && file(keystorePath).exists()) {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("CHATTERS_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("CHATTERS_KEY_ALIAS") ?: "chatters"
+                keyPassword = System.getenv("CHATTERS_KEY_PASSWORD")
+            }
+        }
+    }
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "com.chatters.app"
@@ -40,6 +53,10 @@ android {
             }
         }
         getByName("release") {
+            val releaseSigning = signingConfigs.findByName("release")
+            if (releaseSigning?.storeFile != null) {
+                signingConfig = releaseSigning
+            }
             optimization {
                enable = true
             }

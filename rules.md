@@ -61,6 +61,7 @@
 2. R7.2 依赖版本锁定（`Cargo.lock`、`package-lock.json` 提交入库）。
 3. R7.3 项目须能按 `README.md` 步骤在干净机器上构建。
 4. R7.4 构建生成物不入库：`target/`、`dist/`、`src-tauri/gen/schemas/`（`tauri_build::build()` 按当前依赖重建，仅供编辑器校验 `capabilities/*.json` 的 `$schema`；新克隆首次构建前编辑器缺 schema 属正常）。`src-tauri/gen/android/` 是源码工程（Manifest、Kotlin 插件、Gradle），必须入库，不得被忽略规则误伤。
+5. R7.5 签名材料不入库：Android keystore（`*.jks`/`*.keystore`）、Windows 证书（`*.pfx`）、`keystore.properties`、`.secrets/` 一律由 `.gitignore` 排除；CI 通过 GitHub Secrets 注入（名称见 `02` §11.3），禁止把密钥或密码写入代码、文档或提交历史。
 
 ## 8. 交互与提示规范（v3）
 

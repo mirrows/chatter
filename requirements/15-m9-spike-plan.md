@@ -252,7 +252,7 @@ D:\tools\gradle\gradle-9.6.1\bin\gradle.bat assembleArm64Release -x rustBuildArm
 | 原生库 | `lib/arm64-v8a/libchatters_lib.so`（9.38 MB，含当前前端资源） |
 | 包名 / 版本 | `com.chatters.app` / versionCode `1000000`，versionName `1.0.0-rc.1` |
 | SDK | minSdk `24`、targetSdk `36`、compileSdk `36` |
-| 签名方案 | v2 + v3（未启用 v1），证书 `C=US, O=Android, CN=Android Debug` |
+| 签名方案 | 默认 debug keystore（仅侧载）；配置 `CHATTERS_*` 后为 release keystore 签名（v2 + v3，v1 未启用），证书 `CN=Chatters, O=Chatters, C=CN`，SHA-256 指纹见 `02` §11.3 |
 | 安装验证 | ⏳ 未执行：`adb devices` 无设备（仍无真机） |
 
 校验命令：

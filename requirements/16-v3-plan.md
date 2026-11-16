@@ -532,7 +532,22 @@ message({ type: "success" | "error" | "info", text: string, duration = 1500 }): 
   - 位图损坏/缺失时按 `.part` 内容与块表逐块比对重建（`rebuild_bitmap`）并重新落盘，只重发哈希不符的块；`.part` 已预分配为 size，重试不受文件长度影响。
 - **待办**：1GB 真机断网续传验收、断线重连后的位图续传验证（M11 代码已完成）。
 - **产物（2026-11-16 全量验收包，内嵌 `index-CA_t8xbo.js` / `index-B68X56oA.css`）**：
-  - APK：11.61 MB（aligned 11.54 MB），SHA-256 `6053C24320CDE9C6B2115F3A9E43078444E97F66F03589C60B3022E1D7B5D359`。
+  - APK（**release 签名，推荐验收**）：11.55 MB，`src-tauri/target/android/Chatters-1.0.0-rc.1-arm64-release.apk`，SHA-256 `1D308753B9E5FFC93A93698BCCAA7A32EFA56C81F401829D851E715DC86A1BEB`（证书 `CN=Chatters`，指纹见 `02` §11.3）。
+  - APK（旧 debug 签名，仅侧载对照）：11.61 MB，SHA-256 `6053C24320CDE9C6B2115F3A9E43078444E97F66F03589C60B3022E1D7B5D359`。
   - exe：13.86 MB（`target/release/chatters.exe`），SHA-256 `960BBDBB791666AAB2B09DC6F2D82055B61808D9251CA98A9D5520A9B135B7AA`。
   - NSIS 安装包：3.14 MB（`target/release/bundle/nsis/Chatters_1.0.0-rc.1_x64-setup.exe`，未签名），SHA-256 `D0ADC159F57786C872AB2FB3A64399689397DD4CAC51041A750357DD24751157`。
+
+
+### I6.15 · Android release 签名接入（2026-11-16）
+
+| # | 项 | 实现 |
+|---|---|---|
+| 1 | keystore | 本地生成 release keystore（PKCS12 / RSA 4096 / 10000 天 / alias `chatters`），存于仓库外并由维护者备份；证书 SHA-256 指纹记录在 `02` §11.3 |
+| 2 | 忽略规则 | `.gitignore` 新增 `*.jks`、`*.keystore`、`*.pfx`、`keystore.properties`、`.secrets/`（`rules.md` R7.5） |
+| 3 | Gradle | `app/build.gradle.kts` 新增 `signingConfigs.create("release")`，从 `CHATTERS_*` 环境变量读取；keystore 不存在时保持未签名（不影响本地/他人构建） |
+| 4 | 打包脚本 | `tools/build-android-arm64.ps1` 优先采用 Gradle 已签名产物（跳过二次签名）；支持 `-ReleaseKeystore/...` 参数与环境变量；无密钥时回退 debug 签名并提示"仅侧载" |
+| 5 | CI | android job 新增可选"还原 release keystore"步骤（4 个 Secrets），签名步骤按「Gradle 已签名 → 直接采用；否则 debug 后签」分支；artifact 上传 `target/android/*.apk` |
+
+- **验证**：无密钥 `gradle assembleArm64Release` 仍产出 `app-arm64-release-unsigned.apk`（回退路径不变）；有密钥产出 `app-arm64-release.apk`，`apksigner verify --print-certs` 指纹与 keystore 一致；脚本输出 `Chatters-1.0.0-rc.1-arm64-release.apk`（11.55 MB，SHA-256 `1D308753…1BEB`）。
+- **注意**：debug 与 release 签名不兼容，首次安装 release 包需先卸载旧 debug 包；keystore 丢失将无法覆盖升级；`versionCode` 建议随发布递增。
 

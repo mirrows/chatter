@@ -36,7 +36,11 @@ param(
     [string]$DebugKeystore = '',
     [string]$DebugKeyAlias = 'androiddebugkey',
     [string]$DebugKeyStorePass = 'android',
-    [string]$DebugKeyPass = 'android'
+    [string]$DebugKeyPass = 'android',
+    [string]$ReleaseKeystore = '',
+    [string]$ReleaseKeyAlias = 'chatters',
+    [string]$ReleaseKeyStorePass = '',
+    [string]$ReleaseKeyPass = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -47,7 +51,25 @@ $androidProject = Join-Path $srcTauri 'gen\android'
 $jniLibDir = Join-Path $androidProject "app\src\main\jniLibs\$AndroidAbi"
 $rustSo = Join-Path $srcTauri "target\$RustTarget\release\libchatters_lib.so"
 $unsignedApk = Join-Path $androidProject "app\build\outputs\apk\$ApkAbi\release\app-$ApkAbi-release-unsigned.apk"
+$gradleSignedApk = Join-Path $androidProject "app\build\outputs\apk\$ApkAbi\release\app-$ApkAbi-release.apk"
 $outputDir = Join-Path $srcTauri 'target\android'
+
+# release keystore 优先取参数，其次取环境变量（与 Gradle 的 CHATTERS_* 约定一致）。
+if ([string]::IsNullOrWhiteSpace($ReleaseKeystore) -and $env:CHATTERS_KEYSTORE) {
+    $script:ReleaseKeystore = $env:CHATTERS_KEYSTORE
+}
+if ([string]::IsNullOrWhiteSpace($ReleaseKeyStorePass) -and $env:CHATTERS_KEYSTORE_PASSWORD) {
+    $script:ReleaseKeyStorePass = $env:CHATTERS_KEYSTORE_PASSWORD
+}
+if ($ReleaseKeyAlias -eq 'chatters' -and $env:CHATTERS_KEY_ALIAS) {
+    $script:ReleaseKeyAlias = $env:CHATTERS_KEY_ALIAS
+}
+if ([string]::IsNullOrWhiteSpace($ReleaseKeyPass) -and $env:CHATTERS_KEY_PASSWORD) {
+    $script:ReleaseKeyPass = $env:CHATTERS_KEY_PASSWORD
+}
+if (-not [string]::IsNullOrWhiteSpace($ReleaseKeystore) -and -not (Test-Path $ReleaseKeystore)) {
+    throw "release keystore not found: $ReleaseKeystore"
+}
 
 function Assert-Environment {
     if (-not $env:JAVA_HOME) { throw 'JAVA_HOME is not set (JDK 17 is required by AGP 8.x)' }
@@ -59,13 +81,6 @@ function Assert-Environment {
     foreach ($exe in @('zipalign.exe', 'apksigner.bat', 'aapt2.exe')) {
         $path = Join-Path $buildTools $exe
         if (-not (Test-Path $path)) { throw "missing $exe in $buildTools" }
-    }
-
-    if ([string]::IsNullOrWhiteSpace($DebugKeystore)) {
-        $script:DebugKeystore = Join-Path $env:USERPROFILE '.android\debug.keystore'
-    }
-    if (-not (Test-Path $DebugKeystore)) {
-        throw "debug keystore not found: $DebugKeystore (run one Gradle debug build first)"
     }
     return $buildTools
 }
@@ -137,8 +152,6 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "gradle assemble failed ($LASTEXITCODE)" }
 } finally { Pop-Location }
 
-if (-not (Test-Path $unsignedApk)) { throw "unsigned APK not found: $unsignedApk" }
-
 $versionName = '1.0.0'
 $tauriProps = Join-Path $androidProject 'app\tauri.properties'
 if (Test-Path $tauriProps) {
@@ -146,19 +159,48 @@ if (Test-Path $tauriProps) {
     if ($match) { $versionName = $match.Matches[0].Groups[1].Value.Trim() }
 }
 
-Write-Host '[5/5] zipalign + apksigner sign'
+Write-Host '[5/5] 收集 release APK'
 New-Item -ItemType Directory -Force $outputDir | Out-Null
-$alignedApk = Join-Path $outputDir "Chatters-$versionName-$ApkAbi-aligned.apk"
-$signedApk = Join-Path $outputDir "Chatters-$versionName-$ApkAbi-debugsigned.apk"
 
-& (Join-Path $buildTools 'zipalign.exe') -p -f 4 $unsignedApk $alignedApk
-if ($LASTEXITCODE -ne 0) { throw "zipalign failed ($LASTEXITCODE)" }
+$useReleaseKeystore = -not [string]::IsNullOrWhiteSpace($ReleaseKeystore) -and (Test-Path $ReleaseKeystore)
+if (Test-Path $gradleSignedApk) {
+    # Gradle 已用 release keystore 签名（CHATTERS_* 环境变量）→ 直接采用，避免二次签名。
+    $signedApk = Join-Path $outputDir "Chatters-$versionName-$ApkAbi-release.apk"
+    Copy-Item $gradleSignedApk $signedApk -Force
+    Write-Host '      gradle already signed with the release keystore'
+} else {
+    if (-not (Test-Path $unsignedApk)) { throw "unsigned APK not found: $unsignedApk" }
+    $alignedApk = Join-Path $outputDir "Chatters-$versionName-$ApkAbi-aligned.apk"
+    $signedApk = if ($useReleaseKeystore) {
+        Join-Path $outputDir "Chatters-$versionName-$ApkAbi-release.apk"
+    } else {
+        Join-Path $outputDir "Chatters-$versionName-$ApkAbi-debugsigned.apk"
+    }
 
-& (Join-Path $buildTools 'apksigner.bat') sign `
-    --ks $DebugKeystore --ks-key-alias $DebugKeyAlias `
-    --ks-pass "pass:$DebugKeyStorePass" --key-pass "pass:$DebugKeyPass" `
-    --out $signedApk $alignedApk
-if ($LASTEXITCODE -ne 0) { throw "apksigner sign failed ($LASTEXITCODE)" }
+    & (Join-Path $buildTools 'zipalign.exe') -p -f 4 $unsignedApk $alignedApk
+    if ($LASTEXITCODE -ne 0) { throw "zipalign failed ($LASTEXITCODE)" }
+
+    if ($useReleaseKeystore) {
+        Write-Host '      signing with the release keystore'
+        & (Join-Path $buildTools 'apksigner.bat') sign `
+            --ks $ReleaseKeystore --ks-key-alias $ReleaseKeyAlias `
+            --ks-pass "pass:$ReleaseKeyStorePass" --key-pass "pass:$ReleaseKeyPass" `
+            --out $signedApk $alignedApk
+    } else {
+        if ([string]::IsNullOrWhiteSpace($DebugKeystore)) {
+            $script:DebugKeystore = Join-Path $env:USERPROFILE '.android\debug.keystore'
+        }
+        if (-not (Test-Path $DebugKeystore)) {
+            throw "no release keystore configured and debug keystore not found: $DebugKeystore (run one Gradle debug build first)"
+        }
+        Write-Host '      signing with the debug keystore (sideload only)'
+        & (Join-Path $buildTools 'apksigner.bat') sign `
+            --ks $DebugKeystore --ks-key-alias $DebugKeyAlias `
+            --ks-pass "pass:$DebugKeyStorePass" --key-pass "pass:$DebugKeyPass" `
+            --out $signedApk $alignedApk
+    }
+    if ($LASTEXITCODE -ne 0) { throw "apksigner sign failed ($LASTEXITCODE)" }
+}
 
 & (Join-Path $buildTools 'apksigner.bat') verify --verbose --print-certs $signedApk
 if ($LASTEXITCODE -ne 0) { throw "apksigner verify failed ($LASTEXITCODE)" }
@@ -178,4 +220,8 @@ Write-Host ''
 Write-Host "APK   : $signedApk"
 Write-Host ("size  : {0:N2} MB" -f ((Get-Item $signedApk).Length / 1MB))
 Write-Host "sha256: $hash"
-Write-Host 'note  : signed with the Android debug keystore - sideload only; store release needs a real keystore.'
+if ($useReleaseKeystore -or (Test-Path $gradleSignedApk)) {
+    Write-Host 'note  : signed with the release keystore (distribution ready).'
+} else {
+    Write-Host 'note  : signed with the Android debug keystore - sideload only; configure CHATTERS_KEYSTORE for a release build.'
+}
