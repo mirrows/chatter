@@ -563,4 +563,10 @@ message({ type: "success" | "error" | "info", text: string, duration = 1500 }): 
 
 - **用法**：`git tag v1.0.0-rc.2; git push origin v1.0.0-rc.2`，或 Actions → Release → Run workflow（填 tag）。
 - **注意**：产物版本号取自 `tauri.conf.json` 的 `version`，发版前需同步递增；`ci.yml` 的 android job 保持手动触发（仅用于快速验证 APK），日常 push 只跑 frontend + rust 三平台。
+- **首次成功（2026-11-16，tag `v1.0.0-rc.1-test`，pre-release）**：`windows` + `android` + `publish` 全绿，Release 资产 4 个：
+  - `Chatters-arm64-release.apk`（11.5 MB，SHA-256 `71c1b58e27a9882521fc44c93333290b17b1efc00a47c8d2dade4f38467b1554`；`apksigner` 验证 `CN=Chatters`，仅含 `arm64-v8a`）
+  - `chatters.exe`（14.1 MB）
+  - `Chatters_1.0.0-rc.1_x64-setup.exe`（3.16 MB，未签名）
+  - `SHA256SUMS.txt`（首次因两个 job 的同名文件互相覆盖，只含 APK 哈希；已在同一提交修复为「合并 + 去重」，下次发布包含全部 3 项）
+- **CI 产物与本地产物哈希不同属正常**（编译环境/时间戳差异），以 Release 内 `SHA256SUMS.txt` 为准。
 

@@ -147,11 +147,13 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: 汇总产物
+      - name: 汇总产物（合并 SHA256SUMS，避免不同 job 的同名文件互相覆盖）
         run: |
           mkdir -p release
-          find artifacts -type f \( -name '*.exe' -o -name '*.apk' -o -name 'SHA256SUMS.txt' \) -exec cp {} release/ \;
+          find artifacts -type f \( -name '*.exe' -o -name '*.apk' \) -exec cp {} release/ \;
+          find artifacts -name 'SHA256SUMS.txt' -exec cat {} + | sort -u > release/SHA256SUMS.txt
           ls -l release
+          cat release/SHA256SUMS.txt
       - name: 发布到 GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
