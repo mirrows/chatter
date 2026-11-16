@@ -156,6 +156,15 @@ mod tests {
                 .unwrap_or_default();
             assert!(arg.ends_with("/tmp") || arg.ends_with("tmp"), "arg = {arg}");
         }
+        #[cfg(target_os = "macos")]
+        {
+            // macOS：`open -R <path>` 在 Finder 中定位文件（同时避免 unused variable）。
+            let args: Vec<String> = reveal
+                .get_args()
+                .map(|arg| arg.to_string_lossy().to_string())
+                .collect();
+            assert!(args.iter().any(|arg| arg == "-R"), "args = {args:?}");
+        }
     }
 
     /// 异常：不存在的路径由系统返回错误（Windows 走 ShellExecuteW 的错误码）。
