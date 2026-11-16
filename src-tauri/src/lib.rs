@@ -490,6 +490,7 @@ pub fn run() -> Result<(), tauri::Error> {
             commands::retry_transfer,
             commands::list_transfers,
             commands::get_image_preview,
+            commands::get_image_path,
             commands::pick_file,
             commands::get_settings,
             commands::save_settings,

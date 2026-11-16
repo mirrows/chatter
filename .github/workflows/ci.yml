@@ -69,13 +69,19 @@ jobs:
       - name: cargo clippy
         working-directory: src-tauri
         shell: bash
+        env:
+          CARGO_TERM_COLOR: never
         run: |
           set +e
           cargo clippy --all-targets --message-format=short -- -D warnings > clippy.log 2>&1
           status=$?
           if [ "$status" -ne 0 ]; then
-            # 失败时把日志末尾输出为 annotation（每个 step 最多 10 条 error），便于直接定位。
-            tail -30 clippy.log | while IFS= read -r line; do
+            # 优先输出错误/警告行；没有则回退到日志尾部（每 step 最多 10 条 error annotation）。
+            lines=$(grep -E "^(error|warning: )" clippy.log | head -20)
+            if [ -z "$lines" ]; then
+              lines=$(tail -20 clippy.log)
+            fi
+            printf '%s\n' "$lines" | while IFS= read -r line; do
               if [ -n "$line" ]; then
                 echo "::error::${line}"
               fi

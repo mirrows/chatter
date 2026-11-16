@@ -1207,6 +1207,24 @@ pub async fn get_image_preview(
     ))
 }
 
+/// 返回图片的本地绝对路径（v3：桌面端用 asset 协议流式预览，避免 base64 IPC 与 20MB 限制）。
+///
+/// Android 端不使用该命令（WebView 对 asset 协议支持不一致），仍走 `get_image_preview`。
+#[tauri::command]
+pub async fn get_image_path(
+    state: tauri::State<'_, AppState>,
+    transfer_id: String,
+) -> Result<String, String> {
+    let running = state.transfers.get(&transfer_id).await;
+    let source = state.transfers.source_path(&transfer_id).await;
+    let stored = state.history.find_transfer(&transfer_id).await;
+    let (path, kind) = preview_source(running.as_ref(), source.as_deref(), stored.as_ref())?;
+    if kind != TransferKind::Image {
+        return Err("not an image".to_string());
+    }
+    Ok(path)
+}
+
 /// 打开系统文件选择框，返回选中文件的绝对路径（F20/F30）。
 #[tauri::command]
 pub async fn pick_file(app: tauri::AppHandle, images_only: bool) -> Result<Option<String>, String> {

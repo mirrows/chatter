@@ -519,11 +519,13 @@ message({ type: "success" | "error" | "info", text: string, duration = 1500 }): 
 | 4 | 清理规则 | 成功：删 `.bitmap` + 续传元数据；取消/拒绝：删 `.part` + `.bitmap` + 元数据；校验失败/断线：保留（重试时按位图只补缺失块） |
 | 5 | 测试 | 新增集成：`chunkmap_transfers_multi_block_file`（2.5MB 多块）、`legacy_peer_falls_back_without_chunkmap`（空 features 模拟旧端）；协议 `FileResult.error` 断言更新 |
 
-- **门禁**：`cargo test` lib **122** + 集成 **26**（file_transfer 14 / discovery 5 / text 5 / reconnect 2）；`clippy -D warnings` 0、`fmt` 0；前端未改（`npm run test` 234 基线不变）。
+- **门禁**：`cargo test` lib **122** + 集成 **26**（file_transfer 14 / discovery 5 / text 5 / reconnect 2）；`clippy -D warnings` 0、`fmt` 0；前端 **236 passed / 27 文件**（新增 asset 预览 2 例）。
 - **自动补发（2026-11-16 补充）**：`sender::run` 改为「发送 → DONE → 结果」循环，`missing_blocks` 时最多自动补发 2 轮（重发 BLOCK_MAP → HAVE → 只发缺失块）；`receiver::on_block_map` 允许从 `Failed` 恢复（`missing_blocks` 保留位图，`file_hash_mismatch` 重置位图），集成用例 `receiver_recovers_from_missing_blocks_on_new_block_map`。
 - **断线自动续传（2026-11-16 补充）**：`SessionEvent::PeerConnected` → `TransferManager::handle_peer_connected`，对「发送方向 + Failed + 连接已断开 + 未自动重试」的任务自动重试一次（新任务继承源文件，接收端按位图只补缺失块）。
 - **MulticastLock 前后台管理（2026-11-16）**：`ChattersAndroidPlugin` 注册 `ActivityLifecycleCallbacks`，`onActivityPaused` 释放锁、`onActivityResumed` 重新获取（Kotlin 侧幂等）；Rust 启动时仍主动 acquire，避免等首个 resume。
 - **CI Android job（2026-11-16）**：`.github/workflows/ci.yml` 新增 `workflow_dispatch` 触发的 `android` job（SDK 36 + NDK 27 + `cargo build --target aarch64-linux-android --features tauri/custom-protocol` + Gradle `assembleArm64Release` + zipalign/apksigner + artifact）。
+- **大图预览改 asset 协议（2026-11-16）**：新增 `get_image_path` 命令与 `tauri.conf.json` 的 `assetProtocol`（scope 限定 `$HOME/$APPDATA/$DOWNLOAD/$PICTURE/$DESKTOP`，Cargo 启用 `protocol-asset`）；前端 `loadPreview` 桌面端用 `convertFileSrc` 流式加载（不受 20MB 限制、不占 IPC），Android 与路径不可用时回退 base64（`get_image_preview`）。新增 2 个前端用例（asset 优先 / 路径失败回退）。
+- **文档一致性（2026-11-16）**：`11-acceptance-checklist.md` 的发布检查更新（绿色 exe、NSIS、SmartScreen）与"已知不做"改为 M11 已交付。
 - **位图重建（2026-11-16 补充）**：`.bitmap` 缺失/损坏时由 `chunkmap::rebuild_bitmap` 按块表逐块比对 `.part` 重建并重新落盘；新增单测 `rebuild_bitmap_from_partial_data` 与集成用例 `chunkmap_rebuilds_missing_bitmap_and_resumes`（无位图 + 只有首块的 `.part` → 只补缺失块并校验通过）。
 - **行为说明**：
   - 接收端回 `missing_blocks:N` 时，发送端**自动重发块表并只补缺失块**（最多 2 轮，失败才上报）；接收端在 `Failed` 状态下收到新块表会恢复为 `Transferring`（`file_hash_mismatch` 时重置位图重传）。

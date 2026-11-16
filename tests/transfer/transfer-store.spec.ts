@@ -11,7 +11,9 @@ const api = vi.hoisted(() => ({
   acceptFile: vi.fn(),
   rejectFile: vi.fn(),
   cancelTransfer: vi.fn(),
+  getImagePath: vi.fn(),
   getImagePreview: vi.fn(),
+  toAssetUrl: vi.fn((path: string) => path),
   retryTransfer: vi.fn(),
   sendPaths: vi.fn(),
   openTransferFile: vi.fn(),
@@ -30,7 +32,9 @@ vi.mock("../../src/api/tauri", () => ({
   rejectFile: api.rejectFile,
   cancelTransfer: api.cancelTransfer,
   retryTransfer: api.retryTransfer,
+  getImagePath: api.getImagePath,
   getImagePreview: api.getImagePreview,
+  toAssetUrl: api.toAssetUrl,
   sendPaths: api.sendPaths,
   openTransferFile: api.openTransferFile,
   revealTransferFile: api.revealTransferFile,
@@ -331,14 +335,42 @@ describe("transfer store", () => {
     expect(store.items.map((item) => item.transferId)).toEqual(["t-2"]);
   });
 
-  it("loadPreview 只取一次并缓存", async () => {
-    api.getImagePreview.mockResolvedValue("data:image/png;base64,AAA");
+  it("loadPreview 桌面端走 asset 协议且只取一次", async () => {
+    api.getImagePath.mockResolvedValue("C:/pics/a.png");
     const store = useTransferStore();
 
     await store.loadPreview("t-1");
     await store.loadPreview("t-1");
-    expect(api.getImagePreview).toHaveBeenCalledTimes(1);
-    expect(store.previews["t-1"]).toBe("data:image/png;base64,AAA");
+    expect(api.getImagePath).toHaveBeenCalledTimes(1);
+    expect(api.getImagePreview).not.toHaveBeenCalled();
+    expect(store.previews["t-1"]).toBe("C:/pics/a.png");
+  });
+
+  it("loadPreview Android 端回退 base64", async () => {
+    const devices = useDeviceStore();
+    devices.local = {
+      deviceId: "self",
+      name: "phone",
+      discoveryPort: 28100,
+      tcpPort: 28101,
+      fingerprint: "1111-2222-3333-4444",
+      platform: "android",
+    };
+    api.getImagePreview.mockResolvedValue("data:image/png;base64,AAA");
+    const store = useTransferStore();
+
+    await store.loadPreview("t-2");
+    expect(api.getImagePath).not.toHaveBeenCalled();
+    expect(store.previews["t-2"]).toBe("data:image/png;base64,AAA");
+  });
+
+  it("loadPreview 路径不可用时回退 base64", async () => {
+    api.getImagePath.mockRejectedValue(new Error("image not received yet"));
+    api.getImagePreview.mockResolvedValue("data:image/png;base64,BBB");
+    const store = useTransferStore();
+
+    await store.loadPreview("t-3");
+    expect(store.previews["t-3"]).toBe("data:image/png;base64,BBB");
   });
 
   it("init 拉取任务并订阅事件；非 Tauri 环境跳过", async () => {

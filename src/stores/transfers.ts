@@ -4,6 +4,7 @@ import {
   acceptFile,
   cancelTransfer,
   getHistory,
+  getImagePath,
   getImagePreview,
   isTauri,
   listTransfers,
@@ -16,6 +17,7 @@ import {
   saveTransferAs,
   sendFile,
   sendPaths,
+  toAssetUrl,
 } from "../api/tauri";
 import type { PathSendResult, StoredTransfer, TransferInfo } from "../api/types";
 import { t } from "../i18n";
@@ -259,9 +261,24 @@ export const useTransferStore = defineStore("transfers", {
     clearPeer(peerId: string) {
       this.items = this.items.filter((item) => item.peerId !== peerId);
     },
-    /** 载入已接收图片的预览 data URL（F23）；失败时记录原因供界面提示。 */
+    /**
+     * 载入已接收图片的预览地址（F23）。
+     *
+     * 桌面端优先走 asset 协议（流式加载，不受 20MB 限制、不占 IPC/内存）；
+     * Android 与路径不可用时回退 base64 `data:` URL。
+     */
     async loadPreview(transferId: string) {
       if (this.previews[transferId]) return;
+      if (!useDeviceStore().isAndroid) {
+        try {
+          const path = await getImagePath(transferId);
+          this.previews[transferId] = toAssetUrl(path);
+          delete this.previewErrors[transferId];
+          return;
+        } catch {
+          // 路径不可用（发送源已移动等）→ 回退 base64，错误在下方统一提示。
+        }
+      }
       try {
         const url = await getImagePreview(transferId);
         this.previews[transferId] = url;

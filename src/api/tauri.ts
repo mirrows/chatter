@@ -1,5 +1,5 @@
 // Tauri IPC 封装：所有与后端的交互集中在此，便于 mock 测试。
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   DeviceEntry,
@@ -110,6 +110,16 @@ export function listTransfers(): Promise<TransferInfo[]> {
 /** 读取已接收图片的 data URL 预览（F23）。 */
 export function getImagePreview(transferId: string): Promise<string> {
   return invoke<string>("get_image_preview", { transferId });
+}
+
+/** 读取图片本地绝对路径（桌面端 asset 协议预览用）。 */
+export function getImagePath(transferId: string): Promise<string> {
+  return invoke<string>("get_image_path", { transferId });
+}
+
+/** 把本地路径转换为 asset 协议 URL；非 Tauri 环境原样返回（便于单测与浏览器预览）。 */
+export function toAssetUrl(path: string): string {
+  return isTauri() ? convertFileSrc(path) : path;
 }
 
 /** 打开系统文件选择框；`imagesOnly` 为 true 时只列出图片。 */

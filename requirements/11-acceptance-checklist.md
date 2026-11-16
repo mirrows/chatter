@@ -54,14 +54,15 @@
 
 | 项 | 期望 | 结果 |
 |---|---|---|
-| 便携包 | `Chatters-1.0.0-rc.1-portable.zip` 解压即用 | ☐（未做，见 `17`） |
-| 安装包（联网构建） | `npm run tauri build` 产出 `Chatters_1.0.0-rc.1_x64-setup.exe` | ☐（未做，见 `17`） |
-| 防火墙规则 | 安装后 `netsh advfirewall firewall show rule name="Chatters UDP 28100"` 存在 | ☐（随安装包验证） |
+| 便携包 | 绿色 `chatters.exe`（13.61 MB） | ✅（2026-11-16 产出，见 `16` I6.14） |
+| 安装包 | `npm run tauri build` 产出 `Chatters_1.0.0-rc.1_x64-setup.exe` | ✅（2026-11-16 产出，3.09 MB，未签名） |
+| 防火墙规则 | 安装后 `netsh advfirewall firewall show rule name="Chatters UDP 28100"` 存在 | ☐（随安装包真机验证） |
 | 单实例 | 重复启动只保留一个进程并聚焦窗口 | ✅（已装 `tauri-plugin-single-instance`，真机验证通过） |
-| SmartScreen | 未签名会提示；发布说明需告知用户 | ☐（未签名交付，见 `17`） |
+| SmartScreen | 未签名会提示；发布说明需告知用户 | ☐（未签名交付，见 `17` §1.2） |
 
 ## D. 已知不做 / 已变更（v1.0.0-rc.1 原文，2026-11-14 修订）
 
 - **已交付**：Android 客户端（v2/M9 起，v3 完成移动端 UI 与真机验收）——原「已知不做」中的 Android 不再适用；
-- **仍未做**：iOS、macOS/Linux 客户端打包、传输加密、群发、消息撤回、历史导出、完整块级续传（M11）、
+- **已交付（v3/M11）**：完整块级续传（`chunkmap` 协商、位图随机写、位图重建、DONE 自动补发 2 轮、断线重连自动续传一次）；
+- **仍未做**：iOS、macOS/Linux 客户端打包、传输加密、群发、消息撤回、历史导出、
   端口热切换（需重启）、多会话分屏视图 —— 统一登记在 `17-v3-followups.md`。
