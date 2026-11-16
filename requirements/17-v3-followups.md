@@ -22,7 +22,7 @@
 | # | 项 | 说明 | 预估 |
 |---|---|---|---|
 | 2.1 | ~~设备上下线提示改用 `message` 组件~~ | ✅ **已完成（2026-11-14）**：`devices.applyUpdate` 直接 `message.success/info`，删除 `notice` 状态与设备页内联提示 + 3s 计时器 | — |
-| 2.2 | M11 完整块级续传（**已排期**：2026-11-14 用户确认） | 按 `02-technical-design.md` §4.7 实现：`FILE_BLOCK_MAP`/`FILE_HAVE`、`.bitmap` 位图随机写、`chunkmap` 协商与降级；当前只有「记录偏移」的简版续传。拆分见 §2.2.1 | 8–12 人日 |
+| 2.2 | M11 完整块级续传（✅ **已完成 2026-11-16**） | 已实现 `FILE_BLOCK_MAP`/`FILE_HAVE`、位图随机写 + 原子落盘、`chunkmap` 协商与旧端降级、位图缺失/损坏按 `.part` 重建；遗留：DONE 后自动补发（当前由用户重试触发）与真机 1GB 断网续传验收。拆分见 §2.2.1 | 8–12 人日（已完成） |
 | 2.3 | Android MulticastLock 前后台管理 | 现在锁随进程存活；切后台不释放，可能影响省电与发现稳定性 | 1 人日 |
 | 2.4 | 断线后自动续传 | M10 只做自动重连，断线任务保持 `failed` 需手动重试 | 2–3 人日 |
 | 2.5 | ~~`resend(msg_id)` 命令~~ | ✅ **已完成（2026-11-14）**：新增 `resend_text` 命令 + `SessionHub::send_text_with_id`，前端 `chat.retry()` 改用它（不替换 id/ts），`chat.receive()` 按 msg_id 去重；收益见 §2.5.1 | — |
@@ -34,9 +34,14 @@
 | S1 协议与位图地基（✅ 2026-11-14 已完成） | `FILE_BLOCK_MAP` / `FILE_HAVE` / `FILE_RESUME_STATE` 帧与 payload；`transfer/chunkmap.rs`：块表（流式计算 + 帧互转）、块位图（置位/缺失/hex）、CRC32、位图原子落盘与校验加载 | 协议往返 + 块表/位图 9 个单测；**`chunkmap` 未声明**，现有流程不变 | 已完成 |
 | S2 发送端（✅ 2026-11-14 已完成） | OFFER 前一次读取同时算整文件 sha256 与块表；ACCEPT 后发 BLOCK_MAP → 等 HAVE（10s 超时按全缺失）→ 只发缺失块（seek）；FILE_RESULT.error 透传 | `sender.rs` 新增分支 + `hash_file_with_blocks` | 已完成 |
 | S3 接收端（✅ 2026-11-14 已完成；位图重建 2026-11-16 补充） | 预分配 `.part`、加载/新建位图并回 HAVE（缺失/损坏时按 `.part` 逐块比对重建）；块哈希校验 + 随机写；位图每 32 块原子落盘；DONE 校验位图全满 + 重算 sha256；失败分类与清理规则 | `receiver.rs` 新增 `on_block_map` / `on_chunk_map` / `on_done_map` + `chunkmap::rebuild_bitmap` | 已完成 |
-| S4 协商与验收（✅ 2026-11-14 已完成，真机待验） | `LOCAL_FEATURES` 加 `chunkmap`；旧端（未声明）自动降级；新增多块 + 旧端降级集成用例 | 集成 24（file_transfer 12 / discovery 5 / text 5 / reconnect 2） | 真机 1GB 断网续传待验收 |
+| S4 协商与验收（✅ 2026-11-14 已完成，真机待验） | `LOCAL_FEATURES` 加 `chunkmap`；旧端（未声明）自动降级；新增多块 + 旧端降级 + 位图重建续传集成用例 | 集成 25（file_transfer 13 / discovery 5 / text 5 / reconnect 2） | 真机 1GB 断网续传待验收 |
 
 > 风险与约束：块大小不一致时丢弃旧块状态；位图损坏时按 `.part` 重建；对端未声明 `chunkmap` 时**必须**回到 v1 偏移续传（现有行为不变）。
+>
+> **M11 遗留（2026-11-16）**：
+>
+> 1. **DONE 后自动补发缺失块未做**：发送端收到 `missing_blocks:N` 直接标记失败，依赖用户「重试」触发按位图补块。建议后续实现：失败后最多 2 轮「BLOCK_MAP → HAVE → 补块 → DONE」，总超时 60s，仍失败才提示用户。
+> 2. **真机验收待执行**：1GB 文件传输中开飞行模式/杀 App → 重试，验证"只补缺失块"；以及断线重连后的位图续传。
 
 ### 2.5.1 `resend(msg_id)` 的收益与改动点
 
