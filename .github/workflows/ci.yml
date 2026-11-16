@@ -147,20 +147,18 @@ jobs:
           cp src-tauri/target/aarch64-linux-android/release/libchatters_lib.so \
              src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/
 
-      - name: Gradle assembleArm64Release
-        working-directory: src-tauri/gen/android
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleArm64Release -x rustBuildArm64Release --console=plain
-
-      - name: 还原 release keystore（可选，未配置 Secrets 时跳过）
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+      - name: 还原 release keystore（可选，未配置 Secrets 时自动跳过）
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          # GitHub Actions 不允许在 step 级 if 中使用 secrets 上下文，因此改用脚本判断。
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "release keystore not configured - Android build falls back to the debug keystore"
+            exit 0
+          fi
           echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
           {
             echo "CHATTERS_KEYSTORE=$RUNNER_TEMP/release.jks"
@@ -168,6 +166,12 @@ jobs:
             echo "CHATTERS_KEY_ALIAS=${ANDROID_KEY_ALIAS:-chatters}"
             echo "CHATTERS_KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
           } >> "$GITHUB_ENV"
+
+      - name: Gradle assembleArm64Release
+        working-directory: src-tauri/gen/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleArm64Release -x rustBuildArm64Release --console=plain
 
       - name: 收集并校验 APK（release 签名优先，未配置时回退 debug）
         run: |
