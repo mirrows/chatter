@@ -136,10 +136,10 @@ jobs:
 
       - name: cargo build（arm64, custom-protocol）
         working-directory: src-tauri
-        env:
-          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
-          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
-        run: cargo build --release --target aarch64-linux-android --features tauri/custom-protocol
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/27.0.12077973"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          cargo build --release --target aarch64-linux-android --features tauri/custom-protocol
 
       - name: 复制 .so 到 jniLibs
         run: |
