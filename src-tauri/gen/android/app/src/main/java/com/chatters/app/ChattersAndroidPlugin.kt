@@ -1,10 +1,12 @@
 package com.chatters.app
 
 import android.app.Activity
+import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.net.wifi.WifiManager
+import android.os.Bundle
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import androidx.activity.result.ActivityResult
@@ -58,6 +60,50 @@ class ChattersAndroidPlugin(private val activity: Activity) : Plugin(activity) {
   private var multicastLock: WifiManager.MulticastLock? = null
   private var pendingSavePath: String? = null
 
+  init {
+    // 前后台管理（v3）：后台释放组播锁省电，回前台重新获取，保证发现不中断。
+    activity.application.registerActivityLifecycleCallbacks(
+      object : Application.ActivityLifecycleCallbacks {
+        override fun onActivityResumed(resumed: Activity) {
+          if (resumed === activity) {
+            runCatching { ensureMulticastLock() }
+          }
+        }
+
+        override fun onActivityPaused(paused: Activity) {
+          if (paused === activity) {
+            runCatching { dropMulticastLock() }
+          }
+        }
+
+        override fun onActivityCreated(created: Activity, state: Bundle?) = Unit
+        override fun onActivityStarted(started: Activity) = Unit
+        override fun onActivityStopped(stopped: Activity) = Unit
+        override fun onActivitySaveInstanceState(saved: Activity, outState: Bundle) = Unit
+        override fun onActivityDestroyed(destroyed: Activity) = Unit
+      },
+    )
+  }
+
+  /** 持有组播锁（幂等）。 */
+  private fun ensureMulticastLock() {
+    if (multicastLock != null) return
+    val wifi = activity.applicationContext
+      .getSystemService(Context.WIFI_SERVICE) as WifiManager
+    val lock = wifi.createMulticastLock("chatters-discovery")
+    lock.setReferenceCounted(false)
+    lock.acquire()
+    multicastLock = lock
+  }
+
+  /** 释放组播锁（幂等）。 */
+  private fun dropMulticastLock() {
+    multicastLock?.let {
+      if (it.isHeld) it.release()
+    }
+    multicastLock = null
+  }
+
   /** 自检：确认插件已正确注册。 */
   @Command
   fun ping(invoke: Invoke) {
@@ -75,14 +121,7 @@ class ChattersAndroidPlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   fun acquireMulticastLock(invoke: Invoke) {
     try {
-      if (multicastLock == null) {
-        val wifi = activity.applicationContext
-          .getSystemService(Context.WIFI_SERVICE) as WifiManager
-        val lock = wifi.createMulticastLock("chatters-discovery")
-        lock.setReferenceCounted(false)
-        lock.acquire()
-        multicastLock = lock
-      }
+      ensureMulticastLock()
       invoke.resolve(JSObject())
     } catch (e: Exception) {
       invoke.reject(e.message ?: "failed to acquire multicast lock")
@@ -93,10 +132,7 @@ class ChattersAndroidPlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   fun releaseMulticastLock(invoke: Invoke) {
     try {
-      multicastLock?.let {
-        if (it.isHeld) it.release()
-      }
-      multicastLock = null
+      dropMulticastLock()
       invoke.resolve(JSObject())
     } catch (e: Exception) {
       invoke.reject(e.message ?: "failed to release multicast lock")

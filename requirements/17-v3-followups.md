@@ -14,7 +14,7 @@
 | 1.1 | Android 正式签名 + 双 ABI | 只有 arm64 debug keystore 包 | **不能上架/分发** | 需真实 keystore；同时产出 `armv7 + arm64` 或 AAB |
 | 1.2 | Windows 安装包（NSIS）与代码签名 | 仅绿色 exe；未签名 | 用户会看到 SmartScreen | `npm run tauri build`（联网）产 NSIS；证书到位后签名 |
 | 1.3 | macOS / Linux 打包 | 未产出 dmg / deb | 跨平台交付缺 2 个平台 | 需对应系统或 CI runner；macOS 需先生成 `.icns` |
-| 1.4 | CI Android 构建 job | `.github/workflows/ci.yml` 只有 frontend + rust（三平台测试） | 移动端问题只能本地暴露 | 需 runner 具备 JDK17 + SDK/NDK + Gradle |
+| 1.4 | CI Android 构建 job | ✅ **已完成（2026-11-16）**：新增 `workflow_dispatch` 触发的 `android` job（SDK 36 + NDK 27 + Gradle + zipalign/apksigner + artifact） | 需在 GitHub Actions 页面手动触发验证 | 手动触发以免每次 push 消耗 10+ 分钟 |
 | 1.5 | E2E 测试 | 未做 | 关键链路（双端收发）靠人工回归 | 可先用 Playwright/WebDriver 覆盖前端 + mock IPC |
 
 ## 2. 功能与稳定性（P1）
@@ -23,7 +23,7 @@
 |---|---|---|---|
 | 2.1 | ~~设备上下线提示改用 `message` 组件~~ | ✅ **已完成（2026-11-14）**：`devices.applyUpdate` 直接 `message.success/info`，删除 `notice` 状态与设备页内联提示 + 3s 计时器 | — |
 | 2.2 | M11 完整块级续传（✅ **已完成 2026-11-16**） | 已实现 `FILE_BLOCK_MAP`/`FILE_HAVE`、位图随机写 + 原子落盘、`chunkmap` 协商与旧端降级、位图缺失/损坏按 `.part` 重建、DONE 后自动补发缺失块（2 轮）；遗留：真机 1GB 断网续传验收。拆分见 §2.2.1 | 8–12 人日（已完成） |
-| 2.3 | Android MulticastLock 前后台管理 | 现在锁随进程存活；切后台不释放，可能影响省电与发现稳定性 | 1 人日 |
+| 2.3 | Android MulticastLock 前后台管理 | ✅ **已完成（2026-11-16）**：`ChattersAndroidPlugin` 注册 `ActivityLifecycleCallbacks`，后台释放、前台重获（幂等），平衡省电与发现稳定性 | — |
 | 2.4 | 断线后自动续传 | ✅ **已完成（2026-11-16）**：`PeerConnected` 时自动重试一次因断线失败的发送任务（`auto_retried` 防循环），接收端按位图只补缺失块 | — |
 | 2.5 | ~~`resend(msg_id)` 命令~~ | ✅ **已完成（2026-11-14）**：新增 `resend_text` 命令 + `SessionHub::send_text_with_id`，前端 `chat.retry()` 改用它（不替换 id/ts），`chat.receive()` 按 msg_id 去重；收益见 §2.5.1 | — |
 

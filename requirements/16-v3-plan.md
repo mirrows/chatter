@@ -522,12 +522,15 @@ message({ type: "success" | "error" | "info", text: string, duration = 1500 }): 
 - **门禁**：`cargo test` lib **122** + 集成 **26**（file_transfer 14 / discovery 5 / text 5 / reconnect 2）；`clippy -D warnings` 0、`fmt` 0；前端未改（`npm run test` 234 基线不变）。
 - **自动补发（2026-11-16 补充）**：`sender::run` 改为「发送 → DONE → 结果」循环，`missing_blocks` 时最多自动补发 2 轮（重发 BLOCK_MAP → HAVE → 只发缺失块）；`receiver::on_block_map` 允许从 `Failed` 恢复（`missing_blocks` 保留位图，`file_hash_mismatch` 重置位图），集成用例 `receiver_recovers_from_missing_blocks_on_new_block_map`。
 - **断线自动续传（2026-11-16 补充）**：`SessionEvent::PeerConnected` → `TransferManager::handle_peer_connected`，对「发送方向 + Failed + 连接已断开 + 未自动重试」的任务自动重试一次（新任务继承源文件，接收端按位图只补缺失块）。
+- **MulticastLock 前后台管理（2026-11-16）**：`ChattersAndroidPlugin` 注册 `ActivityLifecycleCallbacks`，`onActivityPaused` 释放锁、`onActivityResumed` 重新获取（Kotlin 侧幂等）；Rust 启动时仍主动 acquire，避免等首个 resume。
+- **CI Android job（2026-11-16）**：`.github/workflows/ci.yml` 新增 `workflow_dispatch` 触发的 `android` job（SDK 36 + NDK 27 + `cargo build --target aarch64-linux-android --features tauri/custom-protocol` + Gradle `assembleArm64Release` + zipalign/apksigner + artifact）。
 - **位图重建（2026-11-16 补充）**：`.bitmap` 缺失/损坏时由 `chunkmap::rebuild_bitmap` 按块表逐块比对 `.part` 重建并重新落盘；新增单测 `rebuild_bitmap_from_partial_data` 与集成用例 `chunkmap_rebuilds_missing_bitmap_and_resumes`（无位图 + 只有首块的 `.part` → 只补缺失块并校验通过）。
 - **行为说明**：
   - 接收端回 `missing_blocks:N` 时，发送端**自动重发块表并只补缺失块**（最多 2 轮，失败才上报）；接收端在 `Failed` 状态下收到新块表会恢复为 `Transferring`（`file_hash_mismatch` 时重置位图重传）。
   - 位图损坏/缺失时按 `.part` 内容与块表逐块比对重建（`rebuild_bitmap`）并重新落盘，只重发哈希不符的块；`.part` 已预分配为 size，重试不受文件长度影响。
 - **待办**：1GB 真机断网续传验收、断线重连后的位图续传验证（M11 代码已完成）。
-- **产物（2026-11-16，内嵌 `index-PaQBxUHd.js` / `index-B68X56oA.css`）**：
-  - APK：11.48 MB（aligned 11.42 MB），SHA-256 `84E3CF4340666F42E0B92281BAB87AD1630FE63DE333E7CA360FF1B15717C94C`。
-  - exe：13.58 MB（`target/release/chatters.exe`），SHA-256 `811174AF77564728C4DEC2D1E872F78F402763DFEA51DE39AA5FCE5301AA76A9`。
+- **产物（2026-11-16 全量包，内嵌 `index-PaQBxUHd.js` / `index-B68X56oA.css`）**：
+  - APK：11.48 MB（aligned 11.42 MB），SHA-256 `725B7C69CB7675A4E62E6538463294151FE9063F8A9CA1EF02A58ACCC3E84C8E`。
+  - exe：13.61 MB（`target/release/chatters.exe`），SHA-256 `ACA82C68C873CC42C3F638C79BA734CED9F1CA26039026F9D9AE86F00B47BBF2`。
+  - NSIS 安装包：3.09 MB（`target/release/bundle/nsis/Chatters_1.0.0-rc.1_x64-setup.exe`，未签名），SHA-256 `B7D8FAC507B76CEBA337A6FFFFCD7329B1BFA8BC9165D3FCA7500D02EE3AB99D`。
 

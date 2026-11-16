@@ -4,6 +4,8 @@ on:
   push:
     branches: [master, main]
   pull_request:
+  # Android 构建较重（NDK + Gradle，约 10 分钟），只在手动触发时运行（见 android job）。
+  workflow_dispatch:
 
 # v2/M6：三平台矩阵，Windows 为必过，macOS/Linux 用于尽早暴露平台差异。
 jobs:
@@ -74,3 +76,77 @@ jobs:
 
       - name: tauri build（不打包安装包，验证可编译）
         run: npx tauri build --no-bundle
+
+  # Android arm64 构建（v3/§1.4）：手动触发，产出 debug 签名 APK 供真机验收。
+  android:
+    name: android (arm64 APK)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: android-actions/setup-android@v3
+
+      - name: 安装 SDK / NDK
+        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "ndk;27.0.12077973"
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: cargo build（arm64, custom-protocol）
+        working-directory: src-tauri
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+        run: cargo build --release --target aarch64-linux-android --features tauri/custom-protocol
+
+      - name: 复制 .so 到 jniLibs
+        run: |
+          mkdir -p src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a
+          cp src-tauri/target/aarch64-linux-android/release/libchatters_lib.so \
+             src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/
+
+      - name: Gradle assembleArm64Release
+        working-directory: src-tauri/gen/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleArm64Release -x rustBuildArm64Release --console=plain
+
+      - name: 对齐并签名（debug keystore，仅用于侧载测试）
+        run: |
+          BT="$ANDROID_HOME/build-tools/36.0.0"
+          mkdir -p src-tauri/target/android
+          "$BT/zipalign" -p -f 4 \
+            src-tauri/gen/android/app/build/outputs/apk/arm64/release/app-arm64-release-unsigned.apk \
+            src-tauri/target/android/Chatters-arm64-aligned.apk
+          keytool -genkeypair -keystore "$RUNNER_TEMP/debug.keystore" -storepass android \
+            -alias androiddebugkey -keypass android -dname "CN=Android Debug,O=Android,C=US" \
+            -keyalg RSA -keysize 2048 -validity 10000
+          "$BT/apksigner" sign --ks "$RUNNER_TEMP/debug.keystore" --ks-pass pass:android \
+            --key-pass pass:android \
+            --out src-tauri/target/android/Chatters-arm64-debugsigned.apk \
+            src-tauri/target/android/Chatters-arm64-aligned.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chatters-android-arm64
+          path: src-tauri/target/android/Chatters-arm64-debugsigned.apk
