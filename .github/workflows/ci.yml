@@ -73,13 +73,16 @@ jobs:
           CARGO_TERM_COLOR: never
         run: |
           set +e
-          cargo clippy --all-targets --message-format=short -- -D warnings > clippy.log 2>&1
+          cargo clippy --all-targets -- -D warnings > clippy.out 2> clippy.err
           status=$?
           if [ "$status" -ne 0 ]; then
-            # 优先输出错误/警告行；没有则回退到日志尾部（每 step 最多 10 条 error annotation）。
-            lines=$(grep -E "^(error|warning: )" clippy.log | head -20)
+            # 默认 human 格式的诊断在 stderr（无缓冲，避免退出时丢行）；也兜底查 stdout。
+            lines=$(grep -E "^(error|warning: )" clippy.err | head -20)
             if [ -z "$lines" ]; then
-              lines=$(tail -20 clippy.log)
+              lines=$(grep -E "^(error|warning: )" clippy.out | head -20)
+            fi
+            if [ -z "$lines" ]; then
+              lines=$(tail -20 clippy.err)
             fi
             printf '%s\n' "$lines" | while IFS= read -r line; do
               if [ -n "$line" ]; then
