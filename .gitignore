@@ -12,3 +12,6 @@ dist/
 # IDE
 .idea/
 .vscode/
+
+# Tauri 生成物（tauri-build 每次构建时按当前依赖重建；gen/android 是源码工程，必须入库）
+src-tauri/gen/schemas/
