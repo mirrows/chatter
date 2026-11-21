@@ -73,6 +73,30 @@ jobs:
           }
           $lines | Set-Content -Encoding ascii dist/SHA256SUMS.txt
           Get-Content dist/SHA256SUMS.txt
+      - name: 生成 latest.json（Tauri v2 只产出 .sig，清单需自行生成）
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          $setup = Get-ChildItem 'dist/*setup.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $setup) { Write-Host "no setup.exe - skip latest.json"; exit 0 }
+          $sigFile = "$($setup.FullName).sig"
+          if (-not (Test-Path $sigFile)) { Write-Host "no .sig (updater signing skipped) - skip latest.json"; exit 0 }
+          $version = (Get-Content 'src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json).version
+          $url = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG/$($setup.Name)"
+          $json = [ordered]@{
+            version = $version
+            notes = "Chatters $env:RELEASE_TAG"
+            pub_date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            platforms = [ordered]@{
+              'windows-x86_64' = [ordered]@{
+                signature = (Get-Content $sigFile -Raw).Trim()
+                url = $url
+              }
+            }
+          }
+          $json | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 dist/latest.json
+          Get-Content dist/latest.json
       - uses: actions/upload-artifact@v4
         with:
           name: windows-packages
