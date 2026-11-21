@@ -54,7 +54,7 @@ jobs:
             npx tauri build
           } else {
             Write-Host "updater signing key not configured - building without updater artifacts"
-            npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
+            npx tauri build --config src-tauri/tauri.ci.conf.json
           }
       - name: 收集安装包、更新清单与校验值
         shell: pwsh
