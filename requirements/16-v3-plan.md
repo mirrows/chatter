@@ -570,3 +570,23 @@ message({ type: "success" | "error" | "info", text: string, duration = 1500 }): 
   - `SHA256SUMS.txt`（首次因两个 job 的同名文件互相覆盖，只含 APK 哈希；已在同一提交修复为「合并 + 去重」，下次发布包含全部 3 项）
 - **CI 产物与本地产物哈希不同属正常**（编译环境/时间戳差异），以 Release 内 `SHA256SUMS.txt` 为准。
 
+### I6.17 · 自动更新与回滚（2026-11-16）
+
+| # | 项 | 实现 |
+|---|---|---|
+| 1 | 更新源 | Tauri updater 读取 `https://github.com/mirrows/chatter/releases/latest/download/latest.json`；`bundle.createUpdaterArtifacts: true`，公钥写入 `tauri.conf.json` 的 `plugins.updater.pubkey` |
+| 2 | 签名密钥 | `npx tauri signer generate`：私钥 `D:\secure\chatters-updater.key`、密码 `D:\secure\updater-key-password.txt`；CI Secrets `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`（未配置时自动降级为不产更新产物） |
+| 3 | 桌面端 UI | `src/api/update.ts` + `stores/updater.ts`；设置页「版本与更新」：当前版本、检查、下载进度、安装并重启；启动 5 s 静默检查、发现新版轻提示 |
+| 4 | 启动自检与自动回滚 | `src-tauri/src/update.rs`：更新前备份 `previous.exe` + `pending.json`；启动 `attempts+1`；前端 8 s 后 `confirm_update_healthy` 清除；连续 2 次未确认 → 隐藏 PowerShell 脚本等待进程退出后覆盖并重启旧版本；保留 `last-rollback.json` 提示一次 |
+| 5 | 手动回滚 | 设置页「回滚到上一版本」（有备份时显示），二次确认后调用 `rollback_update` 并重启 |
+| 6 | 失败清理 | 下载/安装失败调用 `cancel_update` 撤销 pending，保留备份 |
+| 7 | Android | updater 不支持移动端：设置页提示到 Releases 下载 APK，并提供复制链接 |
+| 8 | CI 触发开关 | `release.yml` 的 `workflow_dispatch.inputs.targets`（all / windows / android），job 级 `if` + publish 汇总 `always() && 至少一侧成功`；tag 推送仍构建全部 |
+| 9 | latest.json 修正 | publish 汇总后用 `jq` 把 `platforms.*.url` 重写为本次 Release 资产地址，避免 CLI 推断的 URL 与仓库不符 |
+| 10 | 服务端回滚 | 新增 `.github/workflows/rollback.yml`：下载 `good_tag` 的 `latest.json` 覆盖 `bad_tag`，并把坏版本标记为 pre-release（未升级用户不再被引导升级；已升级用户由本地自动回滚兜底） |
+| 11 | 文档 | README 新增「发版与自动更新」：版本号、触发、产物、Secrets、回滚与撤销发布 |
+
+- **单测**：`update.rs` 9 个（备份、两次启动回滚、确认健康、无备份不回滚、失败撤销、回滚记录、保留最早备份、损坏 pending）；`tests/update/updater-store.spec.ts` 12 个（初始化、Android、回滚提示、确认健康、检查/安装/失败/回滚）。
+- **限制**：仅桌面（Windows 已实现就地回滚；macOS/Linux 待打包时补 `schedule_replace_and_restart`）；回滚依赖 currentUser 安装模式（`bundle.windows.nsis.installMode = "currentUser"`），安装目录可写。
+
+

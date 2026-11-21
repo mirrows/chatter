@@ -169,20 +169,118 @@
         {{ t("settings.clearHistory") }}
       </button>
     </div>
+
+    <!-- 版本与更新（v3）：桌面端自动更新 + 回滚；移动端引导到 Releases 手动下载 -->
+    <div class="field update" data-testid="settings-update">
+      <span>{{ t("settings.update") }}</span>
+      <div class="field-row">
+        <input
+          :value="`${t('settings.version')} ${updater.currentVersion || '—'}`"
+          readonly
+          class="readonly locked"
+          data-testid="settings-version"
+        />
+        <button
+          v-if="updater.isDesktop"
+          type="button"
+          class="secondary"
+          :disabled="updater.busy"
+          data-testid="settings-check-update"
+          @click="checkUpdate"
+        >
+          {{ t("settings.checkUpdate") }}
+        </button>
+      </div>
+
+      <template v-if="updater.isDesktop">
+        <p v-if="updater.phase === 'checking'" class="hint" data-testid="settings-update-checking">
+          {{ t("update.checking") }}
+        </p>
+        <p v-else-if="updater.phase === 'latest'" class="ok" data-testid="settings-update-latest">
+          {{ t("update.latest") }}
+        </p>
+        <p
+          v-else-if="updater.phase === 'available' && updater.available"
+          class="warn"
+          data-testid="settings-update-available"
+        >
+          {{ t("update.available", { version: updater.available.version }) }}
+        </p>
+        <p
+          v-if="updater.phase === 'downloading'"
+          class="hint"
+          data-testid="settings-update-progress"
+        >
+          {{
+            updater.progress >= 0
+              ? t("update.downloading", { progress: updater.progress })
+              : t("update.downloadingUnknown")
+          }}
+        </p>
+        <p
+          v-if="updater.phase === 'installing'"
+          class="hint"
+          data-testid="settings-update-installing"
+        >
+          {{ t("update.installing") }}
+        </p>
+        <p v-if="updater.error" class="error" data-testid="settings-update-error">
+          {{ t("update.failed", { reason: updater.error }) }}
+        </p>
+        <div class="field-row">
+          <button
+            v-if="updater.phase === 'available'"
+            type="button"
+            :disabled="updater.busy"
+            data-testid="settings-install-update"
+            @click="installUpdate"
+          >
+            {{ t("settings.installUpdate") }}
+          </button>
+          <button
+            v-if="updater.canRollback && !updater.busy"
+            type="button"
+            class="secondary"
+            data-testid="settings-rollback"
+            @click="rollbackUpdate"
+          >
+            {{ t("settings.rollback") }}
+          </button>
+        </div>
+      </template>
+
+      <template v-else>
+        <p class="hint" data-testid="settings-update-unsupported">
+          {{ t("settings.releasesHint") }}
+        </p>
+        <button
+          type="button"
+          class="secondary"
+          data-testid="settings-copy-releases"
+          @click="copyReleases"
+        >
+          {{ t("settings.copyReleasesLink") }}
+        </button>
+      </template>
+    </div>
   </section>
 </template>
 
 <script setup lang="ts">
 import { onMounted, watch } from "vue";
+import { RELEASES_URL } from "../api/update";
 import { usePlatform } from "../composables/usePlatform";
 import { t } from "../i18n";
 import { confirmDialog } from "../stores/confirm";
 import { useErrorLogStore } from "../stores/errorLog";
 import { message } from "../stores/message";
 import { normalizeCleanDays, useSettingsStore } from "../stores/settings";
+import { useUpdaterStore } from "../stores/updater";
+import { copyText } from "../utils/clipboard";
 
 const store = useSettingsStore();
 const errorLog = useErrorLogStore();
+const updater = useUpdaterStore();
 const { isAndroid } = usePlatform();
 
 onMounted(async () => {
@@ -190,6 +288,8 @@ onMounted(async () => {
   store.applyTheme();
   // 错误日志入口只在目录里已有日志时显示（v3）。
   void errorLog.refresh();
+  // 自动更新：读取状态、提示上次回滚，并在窗口稳定后确认新版本健康（v3）。
+  void updater.init();
 });
 
 /** 打开下载目录（v3）：桌面端在文件管理器中打开。 */
@@ -250,6 +350,40 @@ watch(
 async function save() {
   await store.save();
   store.applyTheme();
+}
+
+/** 检查更新（桌面端）：结果直接体现在设置页状态文案（v3）。 */
+async function checkUpdate() {
+  await updater.check();
+}
+
+/** 下载并安装更新：先二次确认，安装成功后应用自动重启。 */
+async function installUpdate() {
+  const version = updater.available?.version ?? "";
+  const confirmed = await confirmDialog({
+    title: t("settings.installUpdate"),
+    message: t("update.available", { version }),
+    confirmText: t("common.ok"),
+  });
+  if (confirmed) await updater.install();
+}
+
+/** 手动回滚到上一版本（危险操作，二次确认）。 */
+async function rollbackUpdate() {
+  const confirmed = await confirmDialog({
+    title: t("settings.rollback"),
+    message: t("settings.rollbackConfirm"),
+    danger: true,
+    confirmText: t("common.ok"),
+  });
+  if (confirmed) await updater.rollback();
+}
+
+/** 移动端：复制 Releases 链接，用户到浏览器下载 APK。 */
+async function copyReleases() {
+  const ok = await copyText(RELEASES_URL);
+  if (ok) message.success(t("settings.releasesLinkCopied"));
+  else message.error(t("chat.copyFailed"));
 }
 
 /** 自启开关（F50）。 */

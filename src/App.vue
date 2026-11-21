@@ -56,6 +56,7 @@ import { usePeerAliasStore } from "./stores/peerAliases";
 import { useSettingsStore } from "./stores/settings";
 import { useShareInboxStore } from "./stores/shareInbox";
 import { useTransferStore } from "./stores/transfers";
+import { useUpdaterStore } from "./stores/updater";
 import { blockContextMenu } from "./utils/contextmenu";
 
 const devices = useDeviceStore();
@@ -64,6 +65,7 @@ const transfers = useTransferStore();
 const settings = useSettingsStore();
 const aliases = usePeerAliasStore();
 const shareInbox = useShareInboxStore();
+const updater = useUpdaterStore();
 const activePeer = ref<DeviceEntry | null>(null);
 const view = ref<"devices" | "settings">("devices");
 let unblockContextMenu: (() => void) | null = null;
@@ -126,6 +128,8 @@ onMounted(() => {
   void settings.load().then(() => settings.applyTheme());
   // 冷启动可能带着系统分享进来（v3）：进入后立即取一次
   void shareInbox.refresh();
+  // 自动更新（v3）：读取状态、提示上次回滚、确认新版本健康并静默检查更新
+  void updater.init();
   document.addEventListener("visibilitychange", onActive);
   window.addEventListener("focus", onActive);
 });

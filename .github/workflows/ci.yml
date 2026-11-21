@@ -96,8 +96,8 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
-      - name: tauri build（不打包安装包，验证可编译）
-        run: npx tauri build --no-bundle
+      - name: tauri build（不打包安装包，验证可编译；无需更新签名密钥）
+        run: npx tauri build --no-bundle --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
   # Android arm64 构建（v3/§1.4）：手动触发，产出 debug 签名 APK 供真机验收。
   android:

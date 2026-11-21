@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "desktop",
-  "description": "桌面端专属权限：开机自启（F50）。Android 无该插件，故按平台排除。",
+  "description": "桌面端专属权限：开机自启（F50）、自动更新（v3）与更新后重启。Android 无这些插件，故按平台排除。",
   "platforms": ["linux", "macOS", "windows"],
   "windows": ["main"],
-  "permissions": ["autostart:default"]
+  "permissions": ["autostart:default", "updater:default", "process:default"]
 }

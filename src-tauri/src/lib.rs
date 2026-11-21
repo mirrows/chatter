@@ -18,6 +18,7 @@ pub mod session;
 pub mod share;
 pub mod storage;
 pub mod transfer;
+pub mod update;
 
 use commands::{
     apply_device_update, AppState, DeviceUpdate, IncomingMessageDto, SessionUpdate, TransferDto,
@@ -135,6 +136,13 @@ pub fn run() -> Result<(), tauri::Error> {
         None,
     ));
 
+    // 自动更新（v3）：桌面端从 GitHub Releases 的 latest.json 检查并安装；
+    // 安装完成后由 process 插件重启，启动自检逻辑见 `update` 模块。
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
+
     // 关闭窗口时最小化到托盘（F51）；真正退出走托盘菜单。移动端无关闭请求。
     #[cfg(desktop)]
     let builder = builder.on_window_event(|window, event| {
@@ -198,6 +206,30 @@ pub fn run() -> Result<(), tauri::Error> {
             let error_log = std::sync::Arc::new(errorlog::ErrorLog::open(
                 app.path().app_data_dir()?.join("logs"),
             ));
+
+            // 自动更新守卫（v3）：若上次更新后连续多次启动都没确认健康，
+            // 先用备份的旧版本覆盖并重启（当前进程无法覆盖自身 exe）。
+            let update_guard = update::UpdateGuard::open(
+                app.path().app_data_dir()?.join("update"),
+                std::env::current_exe()?,
+            );
+            if let update::StartupOutcome::RollbackRequired(pending) = update_guard.on_startup() {
+                log::warn!(
+                    "update {} never confirmed healthy after {} starts, rolling back to {}",
+                    pending.to,
+                    pending.attempts,
+                    pending.from
+                );
+                match update_guard.schedule_rollback() {
+                    Ok(()) => {
+                        update_guard.mark_rolled_back(&pending);
+                        // 交给回滚脚本替换文件并重启，当前进程立即退出。
+                        std::process::exit(0);
+                    }
+                    Err(e) => log::error!("failed to schedule rollback: {e}"),
+                }
+            }
+
             let state = AppState::new(
                 cfg.clone(),
                 config_path.clone(),
@@ -207,6 +239,7 @@ pub fn run() -> Result<(), tauri::Error> {
                 discovery.clone(),
                 error_log,
                 receive_dir.clone(),
+                update_guard,
             );
             let devices = state.devices.clone();
             app.manage(state);
@@ -511,7 +544,13 @@ pub fn run() -> Result<(), tauri::Error> {
             commands::send_paths,
             commands::open_transfer_file,
             commands::reveal_transfer_file,
-            commands::save_transfer_as
+            commands::save_transfer_as,
+            commands::get_update_status,
+            commands::prepare_update,
+            commands::cancel_update,
+            commands::confirm_update_healthy,
+            commands::rollback_update,
+            commands::ack_rollback
         ])
         .run(tauri::generate_context!())
 }

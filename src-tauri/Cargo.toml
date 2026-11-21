@@ -29,6 +29,10 @@ env_logger = "0.11"
 tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
+# 自动更新（v3）：桌面端从 GitHub Releases 的 latest.json 检查并安装；
+# Android 走手动下载 APK，插件不支持移动端，因此放在桌面条件依赖里。
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 # Windows 专属（v3）：打开文件改用 ShellExecuteW，避免 cmd 控制台黑框与额外进程。
 [target.'cfg(windows)'.dependencies]

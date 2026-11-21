@@ -1,0 +1,56 @@
+name: Rollback Release
+
+# 服务端回滚（v3）：把某个已发布版本的 latest.json 指回上一个已知良好版本。
+#
+# 作用范围：
+# - 尚未升级的客户端再次检查更新时，看到的是旧版本号 → 不会升级到坏版本；
+# - 已经升级的客户端靠本地自动回滚（连续两次启动未确认健康 → 用备份覆盖）。
+#
+# 用法：Actions -> Rollback Release -> Run workflow，填 bad_tag（坏版本）与 good_tag（回滚目标）。
+on:
+  workflow_dispatch:
+    inputs:
+      bad_tag:
+        description: "有问题的 Release tag（latest.json 所在且为最新正式版）"
+        required: true
+      good_tag:
+        description: "回滚目标 Release tag（之前的好版本）"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  rollback:
+    name: re-point latest.json
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载旧版本的 latest.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GOOD_TAG: ${{ inputs.good_tag }}
+        run: |
+          mkdir -p out
+          gh release download "$GOOD_TAG" --pattern latest.json --dir out
+          cat out/latest.json
+      - name: 覆盖坏版本的 latest.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BAD_TAG: ${{ inputs.bad_tag }}
+        run: |
+          gh release upload "$BAD_TAG" out/latest.json --clobber
+      - name: 把坏版本标记为 pre-release（避免成为 latest）
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BAD_TAG: ${{ inputs.bad_tag }}
+        run: |
+          gh release edit "$BAD_TAG" --prerelease
+      - name: 输出回滚说明
+        env:
+          BAD_TAG: ${{ inputs.bad_tag }}
+          GOOD_TAG: ${{ inputs.good_tag }}
+        run: |
+          {
+            echo "latest.json 已指回 ${GOOD_TAG}；${BAD_TAG} 已标记为 pre-release。"
+            echo "已升级的用户会在下次启动失败两次后自动回滚到本地备份版本。"
+          } >> "$GITHUB_STEP_SUMMARY"

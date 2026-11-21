@@ -124,6 +124,81 @@ adb install -r src-tauri\target\android\Chatters-1.0.0-rc.1-arm64-debugsigned.ap
 >   发送失败不会静默——会话页会显示「操作失败：…」。
 > - 未读徽标只在**不在该会话页**时累计；进入会话即标记已读。
 
+## 发版与自动更新
+
+### 版本号
+
+发版前同步三处（当前 `1.0.0-rc.1`）：
+
+- `src-tauri/tauri.conf.json` → `version`（决定安装包名与更新版本比较）
+- `src-tauri/Cargo.toml` → `version`
+- `package.json` → `version`
+
+### 触发 Release
+
+```powershell
+git add -A
+git commit -m "chore(release): 1.0.0-rc.2"
+git push origin main
+
+git tag v1.0.0-rc.2
+git push origin v1.0.0-rc.2   # 打 tag 即自动构建 + 发布
+```
+
+或 Actions → **Release** → Run workflow：
+
+| 输入         | 说明                                                                  |
+| ------------ | --------------------------------------------------------------------- |
+| `tag`        | 如 `v1.0.0-rc.2`                                                      |
+| `prerelease` | 测试版勾选（不参与 `releases/latest`）                                |
+| `targets`    | `all` / `windows` / `android`：只跑一侧用于快速重试（例如只重打 APK） |
+
+### 产物
+
+| 文件                               | 说明                                                            |
+| ---------------------------------- | --------------------------------------------------------------- |
+| `Chatters_<version>_x64-setup.exe` | Windows NSIS 安装包（未签名前 SmartScreen 会提示）              |
+| `chatters.exe`                     | 绿色免安装版                                                    |
+| `Chatters-arm64-release.apk`       | Android arm64（release keystore 签名，首次安装需卸载 debug 包） |
+| `*.exe.sig`、`latest.json`         | Tauri 自动更新签名与清单（配置了签名密钥时生成）                |
+| `SHA256SUMS.txt`                   | 全部产物的 SHA-256                                              |
+
+### 自动更新（桌面端）
+
+- 客户端启动 5 秒后静默检查；设置页「版本与更新」可手动检查 / 下载安装 / 回滚
+- 更新源：`https://github.com/mirrows/chatter/releases/latest/download/latest.json`
+- 更新包用 minisign 密钥校验，私钥 `D:\secure\chatters-updater.key`
+  （密码 `D:\secure\updater-key-password.txt`，**切勿提交仓库**）
+- CI 需要在仓库 Secrets 配置：
+
+| Secret                               | 值                                    |
+| ------------------------------------ | ------------------------------------- |
+| `TAURI_SIGNING_PRIVATE_KEY`          | `chatters-updater.key` 文件的全部内容 |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 该密钥的密码                          |
+
+> 未配置 `TAURI_SIGNING_PRIVATE_KEY` 时，Release workflow 自动改用
+> `--config '{"bundle":{"createUpdaterArtifacts":false}}'` 构建普通安装包（不产出
+> `latest.json`），不会让 CI 变红；配置后自动生成更新产物。
+
+### 自动回滚
+
+1. 安装更新前把当前 `chatters.exe` 备份到 `<app_data>/update/previous.exe` 并写 `pending.json`；
+2. 新版本启动 8 秒后前端确认健康 → 删除 `pending.json`；
+3. 连续 **2 次**启动都未确认（Rust panic / 前端白屏 / 秒退）→ 下次启动自动用备份覆盖并重启旧版本，界面提示一次；
+4. 设置页「版本与更新 → 回滚到上一版本」可手动回滚（有备份时显示）。
+
+### 撤销一次有问题的发布
+
+Actions → **Rollback Release** → Run workflow：
+
+- `bad_tag`：有问题的 tag
+- `good_tag`：上一个已知良好的 tag
+
+工作流会用旧版本的 `latest.json` 覆盖坏版本，并把坏版本标记为 pre-release：
+
+- 尚未升级的用户检查更新时看到旧版本号 → 不会被引导升级；
+- 已升级的用户由客户端本地自动回滚兜底。
+
 ## 开发与验证
 
 要求：Node **≥ 20**（本机若 PATH 中存在旧版 Node，请先把新版加入 PATH）、Rust stable、Windows 10/11 x64。

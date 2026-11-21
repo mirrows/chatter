@@ -15,6 +15,7 @@ use crate::storage::{now_millis, History, HistoryStore, StoredMessage, StoredTra
 use crate::transfer::{
     TransferDirection, TransferInfo, TransferKind, TransferManager, TransferState,
 };
+use crate::update::UpdateGuard;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -324,6 +325,8 @@ pub struct AppState {
     pub error_log: Arc<ErrorLog>,
     /// 实际接收目录（Android 固定为 `<app_data>/download/chatter`，v3 清空历史时用它兜底）。
     pub receive_dir: PathBuf,
+    /// 自动更新守卫（v3）：备份、pending 状态与回滚入口。
+    pub update_guard: UpdateGuard,
 }
 
 impl AppState {
@@ -339,6 +342,7 @@ impl AppState {
         discovery: DiscoveryHandle,
         error_log: Arc<ErrorLog>,
         receive_dir: PathBuf,
+        update_guard: UpdateGuard,
     ) -> Self {
         Self {
             config: Arc::new(RwLock::new(config)),
@@ -350,6 +354,7 @@ impl AppState {
             discovery,
             error_log,
             receive_dir,
+            update_guard,
         }
     }
 }
@@ -1633,6 +1638,106 @@ pub async fn delete_files_under(base: &Path, paths: &[String]) -> usize {
         }
     }
     removed
+}
+
+/// 更新状态（v3）：设置页据此展示当前版本、备份与回滚记录。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateStatusDto {
+    /// 当前运行版本（来自 `tauri.conf.json` 的 version）。
+    pub current_version: String,
+    /// 平台标识（windows / android / linux / macOS）。
+    pub platform: String,
+    /// 是否已有可回滚的旧版本备份。
+    pub backup_available: bool,
+    /// 待确认的更新（更新后尚未确认健康）。
+    pub pending: Option<UpdatePendingDto>,
+    /// 上次自动回滚记录（提示一次后清除）。
+    pub last_rollback: Option<UpdateRollbackDto>,
+}
+
+/// 待确认更新的界面数据。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatePendingDto {
+    /// 更新前版本。
+    pub from: String,
+    /// 更新后版本。
+    pub to: String,
+    /// 已启动次数。
+    pub attempts: u32,
+}
+
+/// 回滚记录的界面数据。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateRollbackDto {
+    /// 出问题的版本。
+    pub from: String,
+    /// 回滚到的版本。
+    pub to: String,
+    /// 回滚时间（毫秒时间戳）。
+    pub at: i64,
+}
+
+/// 读取更新状态（v3）。
+#[tauri::command]
+pub fn get_update_status(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> UpdateStatusDto {
+    let guard = &state.update_guard;
+    UpdateStatusDto {
+        current_version: app.package_info().version.to_string(),
+        platform: crate::platform::name().to_string(),
+        backup_available: guard.has_backup(),
+        pending: guard.pending().map(|p| UpdatePendingDto {
+            from: p.from,
+            to: p.to,
+            attempts: p.attempts,
+        }),
+        last_rollback: guard.last_rollback().map(|r| UpdateRollbackDto {
+            from: r.from,
+            to: r.to,
+            at: r.at,
+        }),
+    }
+}
+
+/// 更新安装前调用：备份当前版本并写入 pending（v3）。
+///
+/// 必须在 `downloadAndInstall` 之前调用；下载失败时前端应调用 `cancel_update`。
+#[tauri::command]
+pub fn prepare_update(
+    state: tauri::State<'_, AppState>,
+    from: String,
+    to: String,
+) -> Result<(), String> {
+    state.update_guard.begin_update(&from, &to)
+}
+
+/// 下载/安装失败时撤销 pending（v3），保留备份供手动回滚。
+#[tauri::command]
+pub fn cancel_update(state: tauri::State<'_, AppState>) {
+    state.update_guard.cancel_pending();
+}
+
+/// 新版本启动后确认健康：清除 pending，避免下次启动被自动回滚（v3）。
+#[tauri::command]
+pub fn confirm_update_healthy(state: tauri::State<'_, AppState>) {
+    state.update_guard.confirm_healthy();
+}
+
+/// 手动回滚到上一版本：安排替换脚本，前端随后退出应用（v3）。
+#[tauri::command]
+pub fn rollback_update(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state.update_guard.schedule_rollback()
+}
+
+/// 回滚提示已展示：删除回滚记录（v3）。
+#[tauri::command]
+pub fn ack_rollback(state: tauri::State<'_, AppState>) {
+    state.update_guard.ack_rollback();
 }
 
 #[cfg(test)]

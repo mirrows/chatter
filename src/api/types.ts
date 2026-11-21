@@ -205,3 +205,49 @@ export interface PathSendResult {
   /** 成功时的任务快照。 */
   transfer: TransferInfo | null;
 }
+
+/** 更新状态（v3，与 Rust `UpdateStatusDto` 对应）。 */
+export interface UpdateStatus {
+  /** 当前运行版本（`tauri.conf.json` 的 version）。 */
+  currentVersion: string;
+  /** 平台标识：windows / android / macos / linux。 */
+  platform: string;
+  /** 是否已有可回滚的旧版本备份。 */
+  backupAvailable: boolean;
+  /** 待确认的更新（更新安装后尚未确认健康）。 */
+  pending: UpdatePending | null;
+  /** 上次自动回滚记录（提示一次后清除）。 */
+  lastRollback: UpdateRollback | null;
+}
+
+/** 待确认的更新。 */
+export interface UpdatePending {
+  /** 更新前版本。 */
+  from: string;
+  /** 更新后版本。 */
+  to: string;
+  /** 已启动次数。 */
+  attempts: number;
+}
+
+/** 自动回滚记录。 */
+export interface UpdateRollback {
+  /** 出问题的版本。 */
+  from: string;
+  /** 回滚到的版本。 */
+  to: string;
+  /** 回滚时间（毫秒时间戳）。 */
+  at: number;
+}
+
+/** 检查到的可用更新（v3，来自 GitHub Releases 的 latest.json）。 */
+export interface AvailableUpdate {
+  /** 新版本号。 */
+  version: string;
+  /** 当前版本号。 */
+  currentVersion: string;
+  /** 更新说明（可为空）。 */
+  notes: string | null;
+  /** 发布时间（可为空）。 */
+  date: string | null;
+}
