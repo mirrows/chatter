@@ -86,6 +86,16 @@ npm run tauri build -- --no-bundle
 
 > 首次运行请在 Windows 防火墙弹窗中允许「专用网络」，否则 UDP 28100 / TCP 28101 会被拦截。
 
+> **自动更新产物**：`bundle.createUpdaterArtifacts` 已开启，本地 `npm run tauri build` 会额外尝试生成
+> `.sig` 更新签名，因此需要先设置签名密钥（否则构建失败）：
+>
+> ```powershell
+> $env:TAURI_SIGNING_PRIVATE_KEY = (Get-Content -Raw D:\secure\chatters-updater.key).Trim()
+> $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = Get-Content -Raw D:\secure\updater-key-password.txt
+> ```
+>
+> 只想要安装包、不生成更新产物时，加 `--config src-tauri/tauri.ci.conf.json`。
+
 > release 双击启动**不会**弹控制台窗口。需要现场日志时设置环境变量 `CHATTERS_LOG=1`，
 > 日志追加写入 `%APPDATA%\com.chatters.app\chatters.log`。Windows 上已禁用 WebView 的右键菜单。
 

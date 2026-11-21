@@ -582,7 +582,7 @@ message({ type: "success" | "error" | "info", text: string, duration = 1500 }): 
 | 6 | 失败清理 | 下载/安装失败调用 `cancel_update` 撤销 pending，保留备份 |
 | 7 | Android | updater 不支持移动端：设置页提示到 Releases 下载 APK，并提供复制链接 |
 | 8 | CI 触发开关 | `release.yml` 的 `workflow_dispatch.inputs.targets`（all / windows / android），job 级 `if` + publish 汇总 `always() && 至少一侧成功`；tag 推送仍构建全部 |
-| 9 | latest.json 修正 | publish 汇总后用 `jq` 把 `platforms.*.url` 重写为本次 Release 资产地址，避免 CLI 推断的 URL 与仓库不符 |
+| 9 | latest.json 生成 | **Tauri v2 只产出 `.sig`，不产出 `latest.json`**：windows job 用 `.sig` 内容 + `tauri.conf.json` 版本 + Release 资产 URL 构造清单；publish 汇总后再用 `jq` 统一重写 `platforms.*.url` 兜底 |
 | 10 | 服务端回滚 | 新增 `.github/workflows/rollback.yml`：下载 `good_tag` 的 `latest.json` 覆盖 `bad_tag`，并把坏版本标记为 pre-release（未升级用户不再被引导升级；已升级用户由本地自动回滚兜底） |
 | 11 | 文档 | README 新增「发版与自动更新」：版本号、触发、产物、Secrets、回滚与撤销发布 |
 
