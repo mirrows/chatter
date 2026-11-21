@@ -156,7 +156,7 @@ jobs:
             echo "CHATTERS_KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
           } >> "$GITHUB_ENV"
       - name: tauri android build（arm64；由 CLI 生成 tauri.settings/tauri.properties 等胶水文件）
-        run: npx tauri android build --apk --target aarch64
+        run: npx tauri android build --apk --target aarch64 --config src-tauri/tauri.ci.conf.json
 
       - name: 收集并校验 APK（Gradle 已签名优先，否则回退 debug 签名）
         run: |
