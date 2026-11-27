@@ -80,7 +80,9 @@ case "$TARGET" in
 esac
 
 echo "==> 构建 Chatters.app（target=${TARGET}）"
-npx tauri build --target "$TARGET" --bundles app
+# 主配置开启 createUpdaterArtifacts（需要签名密钥）；macOS 暂不产出更新产物，
+# 统一用 tauri.ci.conf.json 关闭，避免未配置密钥时构建失败。
+npx tauri build --target "$TARGET" --bundles app --config src-tauri/tauri.ci.conf.json
 
 APP="$BUNDLE/macos/Chatters.app"
 [ -d "$APP" ] || {
