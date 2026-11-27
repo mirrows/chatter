@@ -2,7 +2,8 @@
 
 > 无需服务器、免登录的局域网点对点传输工具，支持文字、图片与文件传输。
 > 技术栈：Tauri 2.x + Vue 3 + Rust 后端。当前版本：**1.0.0-rc.1**
-> （桌面 Windows + 移动 Android arm64 均已出包并通过真机验收；v3 UI 重构完成，后续项见 `requirements/17-v3-followups.md`）。
+> （桌面 Windows / macOS 与移动 Android arm64 均已接入出包流程；macOS 为未签名 universal 包，
+> v3 UI 重构完成，后续项见 `requirements/17-v3-followups.md`）。
 
 ## 目录结构
 
@@ -52,7 +53,7 @@
   移动端定时清理、清空历史即时生效
 - 下一步：见 `requirements/17-v3-followups.md`
   （P1：正式签名 + 双 ABI、NSIS/签名、设备上下线提示改 message、M11 块级续传；
-  P2：macOS/Linux 打包、CI Android、E2E、大图 asset 协议）
+  P2：Linux 打包、E2E、大图 asset 协议；macOS 打包已于 2026-11-21 接入）
 
 ## 数据与文件位置
 
@@ -96,6 +97,35 @@ npm run tauri build -- --no-bundle
 >
 > 只想要安装包、不生成更新产物时，加 `--config src-tauri/tauri.ci.conf.json`。
 
+### macOS（dmg + app，可 universal）
+
+```bash
+# 仅本机架构（Apple Silicon → arm64；Intel → x64）
+bash tools/build-macos-dmg.sh
+
+# 通用包（Apple Silicon + Intel；首次需 rustup target add x86_64-apple-darwin）
+bash tools/build-macos-dmg.sh --target universal-apple-darwin
+```
+
+产物在 `src-tauri/target/macos/`：
+
+- `Chatters-<version>-macos-<arm64|universal>.dmg`
+- `Chatters-<version>-macos-<arm64|universal>.app.zip`
+- `SHA256SUMS.txt`
+
+> Tauri 自带的 dmg 打包依赖 Finder AppleScript，headless 环境容易报
+> `AppleEvent 超时 (-1712)`；脚本改用 `hdiutil` 生成 DMG（附 `/Applications` 快捷方式），
+> CI 与本地都不依赖 Finder。
+> 未签名包首次打开需右键 →「打开」；macOS 15+ 若被拦截，到
+> 「系统设置 → 隐私与安全性」点「仍要打开」，或执行
+> `xattr -dr com.apple.quarantine /Applications/Chatters.app`；
+> 签名/公证需配置 `APPLE_SIGNING_IDENTITY` 等 Secrets（见 `requirements/17-v3-followups.md` §1.3）。
+
+> GitHub Actions：
+> - **CI** 工作流手动触发（`Run workflow`）会构建 macOS universal 包并上传 artifact
+>   `chatters-macos-universal`（不创建 Release）；
+> - **Release** 工作流（tag `v*` 或手动触发）会构建 macOS / Windows / Android 并发布到 Releases。
+
 > release 双击启动**不会**弹控制台窗口。需要现场日志时设置环境变量 `CHATTERS_LOG=1`，
 > 日志追加写入 `%APPDATA%\com.chatters.app\chatters.log`。Windows 上已禁用 WebView 的右键菜单。
 
@@ -112,7 +142,15 @@ powershell -ExecutionPolicy Bypass -File .\tools\build-android-arm64.ps1
 powershell -ExecutionPolicy Bypass -File .\tools\build-android-arm64.ps1 -SkipFrontendBuild -SkipRustBuild
 ```
 
-产物：`src-tauri/target/android/Chatters-1.0.0-rc.1-arm64-debugsigned.apk`（约 11.3 MB，含 `lib/arm64-v8a/libchatters_lib.so`）。
+macOS / Linux（环境变量由 `~/.config/chatters/android-env.sh` 提供，详见
+`requirements/18-environment-setup.md` §6.2）：
+
+```bash
+bash tools/build-android-arm64.sh           # release + debug 签名回退
+bash tools/build-android-arm64.sh --debug   # debug 构建
+```
+
+产物：`src-tauri/target/android/Chatters-1.0.0-rc.1-arm64-debugsigned.apk`（本机实测 12 MB，含 `lib/arm64-v8a/libchatters_lib.so`）。
 
 ```powershell
 # 真机安装（首次需在系统设置里允许「未知来源」/「安装未知应用」）
@@ -211,7 +249,11 @@ Actions → **Rollback Release** → Run workflow：
 
 ## 开发与验证
 
-要求：Node **≥ 20**（本机若 PATH 中存在旧版 Node，请先把新版加入 PATH）、Rust stable、Windows 10/11 x64。
+要求：Node **≥ 20**（推荐 **22.22.2**：锁定依赖 `abbrev@5` / `nopt@10` 要求 22.22.2 / 24.15 / 26+；
+本机若 PATH 中存在旧版 Node，请先把新版加入 PATH）、Rust stable、Windows 10/11 x64。
+
+> macOS 开发环境（Node/Rust/Xcode 版本要求、必做配置、系统权限、打包差异）见
+> `requirements/18-environment-setup.md`；可执行 `bash tools/check-env.sh` 一键自检。
 
 ```powershell
 npm install

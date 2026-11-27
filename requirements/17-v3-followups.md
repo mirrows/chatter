@@ -14,7 +14,7 @@
 | 1.1 | Android 正式签名 + 双 ABI | 只有 arm64 debug keystore 包 | **不能上架/分发** | 需真实 keystore；同时产出 `armv7 + arm64` 或 AAB |
 | 1.2 | Windows 安装包（NSIS）与代码签名 | ✅ **NSIS 已完成（2026-11-16）**：`release.yml` 产出 `Chatters_<version>_x64-setup.exe` + 绿色 exe；自动更新见 `16` §I6.17。**仍未签名** | SmartScreen 提示 | 签名方案见 1.6 |
 | 1.6 | Windows 代码签名（SignPath Foundation） | 待申请：需先补 OSI 许可证（仓库目前无 LICENSE），再向 https://signpath.org/apply 提交；通过后接入 `signpath/github-action-submit-signing-request` | 新用户首次运行仍见"未知发布者" | 详见 `16` §I6.17 与 README「发版与自动更新」 |
-| 1.3 | macOS / Linux 打包 | 未产出 dmg / deb | 跨平台交付缺 2 个平台 | 需对应系统或 CI runner；macOS 需先生成 `.icns` |
+| 1.3 | macOS / Linux 打包 | macOS ✅ **已完成（2026-11-21）**：`tools/build-macos-dmg.sh`（`hdiutil`，无 Finder 依赖）+ `ci.yml` 手动 artifact + `release.yml` 发布 job（universal dmg / app.zip）；**Linux 仍未产出** | Linux 缺 deb/AppImage；macOS 未签名 | macOS 签名/公证需 `APPLE_SIGNING_IDENTITY` 等 Secrets；Linux 需对应 runner |
 | 1.4 | CI Android 构建 job | ✅ **已完成（2026-11-16）**：`ci.yml` 的 `android` job（SDK 36 + NDK 27 + Gradle + zipalign/apksigner + artifact）；自动出包与 Releases 发布见 `.github/workflows/release.yml`（tag / 手动触发） | 手动触发以免每次 push 消耗 10+ 分钟 | ✅ |
 | 1.5 | E2E 测试 | 未做 | 关键链路（双端收发）靠人工回归 | 可先用 Playwright/WebDriver 覆盖前端 + mock IPC |
 
