@@ -3,7 +3,7 @@
 #
 # 用法：
 #   bash tools/build-macos-dmg.sh
-#   bash tools/build-macos-dmg.sh --target universal-apple-darwin --out dist
+#   bash tools/build-macos-dmg.sh --target universal-apple-darwin --out /tmp/chatters-dist
 #
 # 说明：
 # - 默认按本机架构构建（Apple Silicon → aarch64-apple-darwin）；
