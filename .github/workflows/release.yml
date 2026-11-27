@@ -20,6 +20,7 @@ on:
           - all
           - windows
           - android
+          - macos
         default: all
   push:
     tags: ["v*"]
@@ -32,12 +33,12 @@ jobs:
     name: windows (NSIS + exe)
     runs-on: windows-latest
     # tag 推送时 inputs.targets 为空 → 两侧都跑；手动触发时可只跑一侧。
-    if: ${{ inputs.targets != 'android' }}
+    if: ${{ inputs.targets != 'android' && inputs.targets != 'macos' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22.22.2"
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -105,12 +106,12 @@ jobs:
   android:
     name: android (arm64 APK)
     runs-on: ubuntu-latest
-    if: ${{ inputs.targets != 'windows' }}
+    if: ${{ inputs.targets != 'windows' && inputs.targets != 'macos' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22.22.2"
           cache: npm
       - uses: actions/setup-java@v4
         with:
@@ -189,11 +190,54 @@ jobs:
           name: android-package
           path: dist/*
 
+  macos:
+    name: macos (universal dmg + app)
+    runs-on: macos-latest
+    # tag 推送时 inputs.targets 为空 → 与 windows/android 一起跑；手动触发可只跑 macos。
+    if: ${{ inputs.targets != 'windows' && inputs.targets != 'android' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.2"
+          cache: npm
+
+      # 同时安装 Apple Silicon 与 Intel 的 Rust std，产出 universal 包。
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: macos-universal
+
+      - run: npm ci
+
+      # 未配置 APPLE_SIGNING_IDENTITY 时产出未签名包（Q13：阶段性允许未签名 dmg）。
+      # 需要签名/公证时，在仓库 Secrets 配置 Apple 证书并在本 job 前导入 keychain；
+      # Tauri 会自动读取 APPLE_SIGNING_IDENTITY / APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID。
+      - name: 构建 universal .app + .dmg（hdiutil，无 Finder 依赖）
+        run: bash tools/build-macos-dmg.sh --target universal-apple-darwin --out dist
+
+      - name: 校验产物
+        run: |
+          set -euo pipefail
+          ls -lh dist
+          hdiutil verify dist/*.dmg
+          unzip -l dist/*.app.zip | head -5
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-packages
+          path: dist/*
+
   publish:
     name: publish release
-    needs: [windows, android]
-    # 只跑一侧时另一个 job 为 skipped：只要至少一侧成功就发布。
-    if: ${{ always() && !cancelled() && (needs.windows.result == 'success' || needs.android.result == 'success') }}
+    needs: [windows, android, macos]
+    # 只跑一侧时其余 job 为 skipped：只要至少一侧成功就发布。
+    if: ${{ always() && !cancelled() && (needs.windows.result == 'success' || needs.android.result == 'success' || needs.macos.result == 'success') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -202,7 +246,7 @@ jobs:
       - name: 汇总产物（合并 SHA256SUMS，避免不同 job 的同名文件互相覆盖）
         run: |
           mkdir -p release
-          find artifacts -type f \( -name '*.exe' -o -name '*.apk' -o -name '*.sig' -o -name 'latest.json' \) -exec cp {} release/ \;
+          find artifacts -type f \( -name '*.exe' -o -name '*.apk' -o -name '*.sig' -o -name 'latest.json' -o -name '*.dmg' -o -name '*.app.zip' \) -exec cp {} release/ \;
           find artifacts -name 'SHA256SUMS.txt' -exec cat {} + | sort -u > release/SHA256SUMS.txt
           ls -l release
           cat release/SHA256SUMS.txt
@@ -214,7 +258,13 @@ jobs:
             echo "no latest.json (updater signing key not configured) - skipping"
             exit 0
           fi
-          ASSET=$(basename "$(ls release/*setup.exe | head -1)")
+          SETUP=$(ls release/*setup.exe 2>/dev/null | head -1 || true)
+          if [ -z "$SETUP" ]; then
+            echo "no windows installer in this release - skipping latest.json URL rewrite"
+            cat release/latest.json
+            exit 0
+          fi
+          ASSET=$(basename "$SETUP")
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ASSET}"
           jq --arg url "$URL" '.platforms |= with_entries(.value.url = $url)' release/latest.json > latest.tmp
           mv latest.tmp release/latest.json
