@@ -195,7 +195,9 @@ bash tools/build-macos-dmg.sh                              # 本机架构
 bash tools/build-macos-dmg.sh --target universal-apple-darwin
 ```
 
-- 打包目标来自 `tauri.macos.conf.json`（`app`，最低系统 12.0）；DMG 由 `hdiutil` 生成，
+- 打包目标来自 `tauri.macos.conf.json`（`app`，最低系统 12.0）；脚本同时传
+  `--config src-tauri/tauri.ci.conf.json` 关闭 updater 产物（主配置
+  `createUpdaterArtifacts=true`，未配置签名密钥时会失败）；DMG 由 `hdiutil` 生成，
   **不依赖 Finder AppleScript**（Tauri 自带 dmg 打包在本机实测报 `AppleEvent 超时 (-1712)`，
   CI 同样避免该路径）；
 - 默认输出到 `src-tauri/target/macos/`（可用 `--out <dir>` 指定）；
