@@ -61,8 +61,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 device_id,
                 name,
                 addr,
+                tcp_port,
             } => {
-                println!("peer connected: id={device_id} name={name} addr={addr}");
+                println!(
+                    "peer connected: id={device_id} name={name} addr={addr} tcp_port={tcp_port:?}"
+                );
                 match hub
                     .send_text(&device_id, &format!("probe says hi to {name}"))
                     .await

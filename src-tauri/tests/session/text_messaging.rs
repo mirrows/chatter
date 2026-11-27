@@ -226,10 +226,19 @@ async fn session_events_carry_peer_identity() {
         .expect("closed");
     match connected_b {
         SessionEvent::PeerConnected {
-            device_id, name, ..
+            device_id,
+            name,
+            addr,
+            tcp_port,
         } => {
             assert_eq!(device_id, "device-a");
             assert_eq!(name, "PC-a");
+            assert_eq!(
+                tcp_port,
+                Some(port_a),
+                "inbound HELLO must expose listen port"
+            );
+            assert!(addr.ip().is_loopback());
         }
         other => panic!("expected PeerConnected, got {other:?}"),
     }
@@ -239,9 +248,66 @@ async fn session_events_carry_peer_identity() {
         .expect("timed out")
         .expect("closed");
     match connected_a {
-        SessionEvent::PeerConnected { device_id, .. } => assert_eq!(device_id, "device-b"),
+        SessionEvent::PeerConnected {
+            device_id,
+            tcp_port,
+            ..
+        } => {
+            assert_eq!(device_id, "device-b");
+            assert_eq!(tcp_port, Some(port_b));
+        }
         other => panic!("expected PeerConnected, got {other:?}"),
     }
+
+    task_a.abort();
+    task_b.abort();
+}
+
+/// 边界：握手后立即发消息时，PeerConnected 必须先于 TextReceived 到达，
+/// 接收方才能先登记设备、再显示消息（F3 手动 IP 入站场景）。
+#[tokio::test]
+async fn peer_connected_precedes_first_text() {
+    let port_b = free_tcp_port().await;
+    let port_a = free_tcp_port().await;
+
+    let (_hub_b, mut events_b, task_b) = start_session(SessionConfig::new(
+        "device-b",
+        "PC-b",
+        port_b,
+        Duration::from_secs(1),
+    ))
+    .await
+    .expect("start session b");
+
+    let (hub_a, _events_a, task_a) = start_session(SessionConfig::new(
+        "device-a",
+        "PC-a",
+        port_a,
+        Duration::from_secs(1),
+    ))
+    .await
+    .expect("start session a");
+
+    hub_a.connect(loopback(port_b)).await.expect("connect");
+    hub_a.send_text("device-b", "hi").await.expect("send");
+
+    let first = timeout(Duration::from_secs(3), events_b.recv())
+        .await
+        .expect("timed out")
+        .expect("closed");
+    assert!(
+        matches!(first, SessionEvent::PeerConnected { .. }),
+        "first event = {first:?}"
+    );
+
+    let second = timeout(Duration::from_secs(3), events_b.recv())
+        .await
+        .expect("timed out")
+        .expect("closed");
+    assert!(
+        matches!(second, SessionEvent::TextReceived { .. }),
+        "second event = {second:?}"
+    );
 
     task_a.abort();
     task_b.abort();
