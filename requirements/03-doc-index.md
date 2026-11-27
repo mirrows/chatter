@@ -23,6 +23,7 @@
 | 15 | `15-m9-spike-plan.md` | M9 Android spike（环境勘察、S0–S3 步骤、实测结论与踩坑）+ 原生四件实现记录 | ✅ 2026-11-14 真机验收通过（签名/双 ABI 见 `17`） |
 | 16 | `16-v3-plan.md` | v3 UI 重构计划与进度（I0–I6.9、验收清单、产物哈希） | ✅ 已完成并验收 |
 | 17 | `17-v3-followups.md` | 后续迭代与优化项（发布阻塞、功能、性能、已决不做、待决策点） | 维护中（唯一待办入口） |
+| 18 | `18-environment-setup.md` | 开发环境配置指南（macOS：Node/Rust/Xcode、桌面门禁、Android 工具链、macOS dmg/app 打包与 `tools/build-macos-dmg.sh`、自检脚本） | ✅ 2026-11-21 |
 
 ## 2. 约定
 
