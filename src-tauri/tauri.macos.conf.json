@@ -1,8 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
-    "targets": ["dmg", "app"],
-    "icon": ["icons/chatters-32.png", "icons/chatters-128.png", "icons/chatters-512.png"],
+    "targets": ["app"],
+    "icon": [
+      "icons/chatters-32.png",
+      "icons/chatters-128.png",
+      "icons/chatters-512.png",
+      "icons/icon.icns"
+    ],
     "macOS": {
       "minimumSystemVersion": "12.0"
     }
