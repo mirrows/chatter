@@ -219,19 +219,19 @@ jobs:
       # 需要签名/公证时，在仓库 Secrets 配置 Apple 证书并在本 job 前导入 keychain；
       # Tauri 会自动读取 APPLE_SIGNING_IDENTITY / APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID。
       - name: 构建 universal .app + .dmg（hdiutil，无 Finder 依赖）
-        run: bash tools/build-macos-dmg.sh --target universal-apple-darwin --out dist
+        run: bash tools/build-macos-dmg.sh --target universal-apple-darwin
 
       - name: 校验产物
         run: |
           set -euo pipefail
-          ls -lh dist
-          hdiutil verify dist/*.dmg
-          unzip -l dist/*.app.zip | head -5
+          ls -lh src-tauri/target/macos
+          hdiutil verify src-tauri/target/macos/*.dmg
+          unzip -l src-tauri/target/macos/*.app.zip | head -5
 
       - uses: actions/upload-artifact@v4
         with:
           name: macos-packages
-          path: dist/*
+          path: src-tauri/target/macos/*
 
   publish:
     name: publish release

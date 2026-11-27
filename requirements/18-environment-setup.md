@@ -192,12 +192,13 @@ cargo test
 ```bash
 cd /Users/david/Files/chatter
 bash tools/build-macos-dmg.sh                              # 本机架构
-bash tools/build-macos-dmg.sh --target universal-apple-darwin --out dist
+bash tools/build-macos-dmg.sh --target universal-apple-darwin
 ```
 
 - 打包目标来自 `tauri.macos.conf.json`（`app`，最低系统 12.0）；DMG 由 `hdiutil` 生成，
   **不依赖 Finder AppleScript**（Tauri 自带 dmg 打包在本机实测报 `AppleEvent 超时 (-1712)`，
   CI 同样避免该路径）；
+- 默认输出到 `src-tauri/target/macos/`（可用 `--out <dir>` 指定）；
 - `bundle.icon` 已补充 `icons/icon.icns`（Tauri 官方要求 macOS 使用 `.icns`）；
 - 产物：`src-tauri/target/macos/Chatters-<version>-macos-<arm64|universal>.dmg` 与 `.app.zip`；
 - 未签名产物分发时，接收方需右键 →「打开」，或执行
