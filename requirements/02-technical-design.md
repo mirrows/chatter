@@ -59,6 +59,8 @@
     按网卡分别广播需要枚举本机地址（如 `if-addrs` 依赖），当前离线构建环境无法引入，
     作为 M2-a 已知限制记录在 `04-milestone-m2-report.md`，不影响单网卡常见场景。
 - F3 手动添加：直接对目标 IP 的 TCP 端口发起握手（见 4.2），成功即视为在线，也向其所在网段定向广播。
+  被连接方在 HELLO 握手后会同样把对端写入设备表并推送 `device://update`（无需发现包），
+  因此即使只有一方手动输入 IP，接收方的设备列表也会出现发送方，可直接进入会话查看消息。
 
 ## 4. TCP 帧协议
 
@@ -259,7 +261,7 @@ src/
 | `take_share_payload()` | 取走系统分享内容（v3，Android `ACTION_SEND`；无分享或桌面端返回 null） |
 | `import_shared_file(uri)` | 把分享的 `content://` 导入缓存并返回本地路径（v3，Android） |
 
-事件：`device://update`、`message://new`、`transfer://update`、`session://update`（会话连接状态）。
+事件：`device://update`（发现包与 TCP 握手）、`message://new`、`transfer://update`、`session://update`（会话连接状态）。
 
 补充说明（M2-b 实现口径）：
 

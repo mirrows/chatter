@@ -74,6 +74,27 @@ pub fn fingerprint(device_id: &str) -> String {
     format!("{}-{}", &hex[0..4], &hex[4..8])
 }
 
+/// 用会话 HELLO 的身份构造设备快照（F3 入站兜底）。
+///
+/// 对方可能从未通过 UDP 发现过本机（手动输入 IP 直接连接），因此入站握手成功后
+/// 需要把 HELLO 中的 `device_id` / `name` / `tcp_port` 补进设备表。
+/// `tcp_port` 缺失（v1 对端）时退回源地址端口：仅保证当前会话可用，断线后无法自动重连。
+pub fn device_from_session(
+    device_id: &str,
+    name: &str,
+    source: SocketAddr,
+    tcp_port: Option<u16>,
+) -> DeviceDto {
+    let port = tcp_port.unwrap_or_else(|| source.port());
+    DeviceDto {
+        device_id: device_id.to_string(),
+        name: name.to_string(),
+        addr: SocketAddr::new(source.ip(), port).to_string(),
+        tcp_port: port,
+        fingerprint: fingerprint(device_id),
+    }
+}
+
 /// 设备表变更事件，通过 Tauri event `device://update` 推送给前端。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(
@@ -1355,13 +1376,7 @@ pub async fn add_device_by_ip(
         .await
         .map_err(|e| format!("连接失败：{e}"))?;
 
-    let dto = DeviceDto {
-        fingerprint: fingerprint(&peer.device_id),
-        device_id: peer.device_id,
-        name: peer.name,
-        addr: target.to_string(),
-        tcp_port: target.port(),
-    };
+    let dto = device_from_session(&peer.device_id, &peer.name, target, Some(target.port()));
     {
         let mut devices = state.devices.write().await;
         apply_device_update(
@@ -1892,6 +1907,43 @@ mod tests {
                 .all(|p| p.len() == 4 && p.chars().all(|c| c.is_ascii_hexdigit())),
             "code = {code}"
         );
+    }
+
+    /// 正常路径：入站 HELLO 的监听端口优先于源地址临时端口（F3 入站兜底）。
+    #[test]
+    fn device_from_session_uses_advertised_port() {
+        let source: SocketAddr = "192.168.1.9:54321".parse().expect("addr");
+        let device = device_from_session("id-1", "PC-a", source, Some(28101));
+        assert_eq!(device.addr, "192.168.1.9:28101");
+        assert_eq!(device.tcp_port, 28101);
+        assert_eq!(device.fingerprint, fingerprint("id-1"));
+    }
+
+    /// 边界：v1 对端没有 tcp_port 时退回源地址端口（断线后不可自动重连）。
+    #[test]
+    fn device_from_session_falls_back_to_source_port() {
+        let source: SocketAddr = "[::1]:54322".parse().expect("addr");
+        let device = device_from_session("id-2", "PC-b", source, None);
+        assert_eq!(device.addr, "[::1]:54322");
+        assert_eq!(device.tcp_port, 54322);
+    }
+
+    /// 正常路径：会话登记与发现包命中同一 device_id 时只保留一条并刷新。
+    #[test]
+    fn session_device_replaces_discovery_entry() {
+        let mut devices = vec![dto("a", "PC-old")];
+        let update = DeviceUpdate::Up {
+            device: device_from_session(
+                "a",
+                "PC-new",
+                "10.0.0.2:50000".parse().expect("addr"),
+                Some(28101),
+            ),
+        };
+        apply_device_update(&mut devices, &update);
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].name, "PC-new");
+        assert_eq!(devices[0].addr, "10.0.0.2:28101");
     }
 
     /// 正常路径：设备 DTO 序列化包含 fingerprint（前端用于人工核对）。

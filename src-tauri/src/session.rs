@@ -66,8 +66,10 @@ pub enum SessionEvent {
         device_id: String,
         /// 对端昵称。
         name: String,
-        /// 对端 TCP 地址。
+        /// 对端 TCP 地址（入站为源地址，出站为连接目标）。
         addr: SocketAddr,
+        /// 对端在 HELLO 中声明的监听端口（v2；v1 为 None）。
+        tcp_port: Option<u16>,
     },
     /// 会话断开。
     PeerDisconnected {
@@ -514,6 +516,18 @@ async fn establish(
         }
     });
 
+    // 先发 PeerConnected 再启动读任务：保证上层先登记设备身份、再收到后续 TEXT。
+    // 否则对方在握手后立即发消息时，接收方可能「先收到消息、设备表里还没有该设备」。
+    let _ = inner
+        .events
+        .send(SessionEvent::PeerConnected {
+            device_id: peer.device_id.clone(),
+            name: peer.name.clone(),
+            addr,
+            tcp_port: peer.tcp_port,
+        })
+        .await;
+
     // 读任务：循环处理帧，结束后清理对端并通知上层。
     let reader_inner = inner.clone();
     let peer_id = peer.device_id.clone();
@@ -547,15 +561,6 @@ async fn establish(
             spawn_reconnect(reader_inner.clone(), peer_id, addr);
         }
     });
-
-    let _ = inner
-        .events
-        .send(SessionEvent::PeerConnected {
-            device_id: peer.device_id.clone(),
-            name: peer.name.clone(),
-            addr,
-        })
-        .await;
 
     Ok(PeerInfo {
         device_id: peer.device_id,

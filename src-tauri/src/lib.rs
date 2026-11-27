@@ -393,6 +393,7 @@ pub fn run() -> Result<(), tauri::Error> {
             // 传输帧直接交给传输中心处理。
             let session_handle = app.handle().clone();
             let chat_history = history.clone();
+            let session_devices = devices.clone();
             tauri::async_runtime::spawn(async move {
                 while let Some(event) = session_events.recv().await {
                     match event {
@@ -432,8 +433,29 @@ pub fn run() -> Result<(), tauri::Error> {
                             notify_if_unfocused(&session_handle, "收到一条新消息");
                         }
                         SessionEvent::PeerConnected {
-                            device_id, name, ..
+                            device_id,
+                            name,
+                            addr,
+                            tcp_port,
                         } => {
+                            // 入站连接（对方手动输入 IP）没有 UDP 发现包：
+                            // 用 HELLO 的身份与监听端口补进设备表，并推给前端（F3）。
+                            let device =
+                                commands::device_from_session(&device_id, &name, addr, tcp_port);
+                            {
+                                let mut guard = session_devices.write().await;
+                                apply_device_update(
+                                    &mut guard,
+                                    &DeviceUpdate::Up {
+                                        device: device.clone(),
+                                    },
+                                );
+                            }
+                            if let Err(e) = session_handle
+                                .emit(DEVICE_UPDATE_EVENT, DeviceUpdate::Up { device })
+                            {
+                                log::warn!("failed to emit session device update: {e}");
+                            }
                             // 重连成功：自动重试一次因断线失败的发送任务（M11）。
                             let retry_router = transfer_router.clone();
                             let retry_peer = device_id.clone();

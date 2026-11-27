@@ -46,6 +46,7 @@ vi.mock("../../src/api/tauri", () => ({
 
 // 必须在 mock 之后导入被测模块。
 import { useChatStore } from "../../src/stores/chat";
+import { useDeviceStore } from "../../src/stores/devices";
 
 const incoming = (msgId: string, text: string, ts: number): IncomingMessage => ({
   peerId: "peer-1",
@@ -139,6 +140,27 @@ describe("chat store", () => {
     expect(messages.map((m) => m.id)).toEqual(["m-1", "m-2"]);
     expect(messages[0].direction).toBe("in");
     expect(store.messagesFor("peer-2")).toHaveLength(0);
+  });
+
+  it("接收未知对端消息后由 device://update 补登记，消息与未读保留（F3 入站）", () => {
+    const chat = useChatStore();
+    const devices = useDeviceStore();
+
+    chat.receive({ peerId: "peer-x", msgId: "m-x", text: "hi", ts: 1 });
+    expect(chat.messagesFor("peer-x")).toHaveLength(1);
+    expect(chat.unreadFor("peer-x")).toBe(1);
+
+    devices.applyUpdate({
+      kind: "up",
+      device: {
+        deviceId: "peer-x",
+        name: "PC-x",
+        addr: "10.0.0.2:28101",
+        tcpPort: 28101,
+        fingerprint: "AAAA-BBBB-CCCC-DDDD",
+      },
+    });
+    expect(devices.devices.some((device) => device.deviceId === "peer-x")).toBe(true);
   });
 
   it("applySession 维护已连接设备列表", () => {
