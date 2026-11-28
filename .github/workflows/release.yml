@@ -126,7 +126,7 @@ jobs:
           Get-ChildItem $bundle -Recurse -File -Filter '*.sig' -ErrorAction SilentlyContinue |
             ForEach-Object { Copy-Item $_.FullName dist/ }
           if (Test-Path "$bundle/latest.json") { Copy-Item "$bundle/latest.json" dist/ }
-          $lines = Get-ChildItem dist -File | Where-Object { $_.Name -ne 'SHA256SUMS.txt' } | ForEach-Object {
+          $lines = Get-ChildItem dist -File | Where-Object { $_.Name -match '\\.(exe|sig)$' } | ForEach-Object {
             $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
             "{0}  {1}" -f $h, $_.Name
           }
