@@ -53,6 +53,15 @@ export default tseslint.config(
     },
   },
   {
+    // Node 工具脚本（tools/*.mjs）：允许 process / console 等 Node 全局。
+    files: ["tools/**/*.mjs"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "module",
+      globals: { ...globals.node },
+    },
+  },
+  {
     files: ["tests/**/*.ts"],
     rules: {
       // 测试里大量使用断言式非空访问与 mock 类型
