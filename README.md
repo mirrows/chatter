@@ -1,7 +1,7 @@
 # Chatters — 局域网点对点传输工具（文字 / 图片 / 文件）
 
 > 无需服务器、免登录的局域网点对点传输工具，支持文字、图片与文件传输。
-> 技术栈：Tauri 2.x + Vue 3 + Rust 后端。当前版本：**1.0.0-rc.1**
+> 技术栈：Tauri 2.x + Vue 3 + Rust 后端。当前版本：**1.0.0-rc.2**
 > （桌面 Windows / macOS 与移动 Android arm64 均已接入出包流程；macOS 为未签名 universal 包，
 > v3 UI 重构完成，后续项见 `requirements/17-v3-followups.md`）。
 
@@ -82,7 +82,7 @@ npm run tauri build -- --no-bundle
 # 产物：src-tauri/target/release/chatters.exe
 ```
 
-当前离线环境已产出免安装版：`src-tauri/target/release/package/Chatters-1.0.0-rc.1-portable.zip`
+当前离线环境已产出免安装版：`src-tauri/target/release/package/Chatters-<version>-portable.zip`
 （含 `Chatters.exe` 与使用说明）。NSIS 打包失败原因为打包器下载超时，联网后重跑即可。
 
 > 首次运行请在 Windows 防火墙弹窗中允许「专用网络」，否则 UDP 28100 / TCP 28101 会被拦截。
@@ -122,6 +122,7 @@ bash tools/build-macos-dmg.sh --target universal-apple-darwin
 > 签名/公证需配置 `APPLE_SIGNING_IDENTITY` 等 Secrets（见 `requirements/17-v3-followups.md` §1.3）。
 
 > GitHub Actions：
+>
 > - **CI** 工作流手动触发（`Run workflow`）会构建 macOS universal 包并上传 artifact
 >   `chatters-macos-universal`（不创建 Release）；
 > - **Release** 工作流（tag `v*` 或手动触发）会构建 macOS / Windows / Android 并发布到 Releases。
@@ -150,11 +151,11 @@ bash tools/build-android-arm64.sh           # release + debug 签名回退
 bash tools/build-android-arm64.sh --debug   # debug 构建
 ```
 
-产物：`src-tauri/target/android/Chatters-1.0.0-rc.1-arm64-debugsigned.apk`（本机实测 12 MB，含 `lib/arm64-v8a/libchatters_lib.so`）。
+产物：`src-tauri/target/android/Chatters-<version>-arm64-debugsigned.apk`（含 `lib/arm64-v8a/libchatters_lib.so`）。
 
 ```powershell
 # 真机安装（首次需在系统设置里允许「未知来源」/「安装未知应用」）
-adb install -r src-tauri\target\android\Chatters-1.0.0-rc.1-arm64-debugsigned.apk
+adb install -r src-tauri\target\android\Chatters-<version>-arm64-debugsigned.apk
 ```
 
 > - 该包用 Android **debug keystore** 签名（`~/.android/debug.keystore`），仅用于 sideload 测试，
@@ -174,42 +175,46 @@ adb install -r src-tauri\target\android\Chatters-1.0.0-rc.1-arm64-debugsigned.ap
 
 ## 发版与自动更新
 
-### 版本号
+### 版本号（由 Release 自动同步）
 
-发版前同步三处（当前 `1.0.0-rc.1`）：
+Release 工作流以 **tag 为唯一版本来源**：`prepare` job 会把 tag（去掉前缀 `v`）写入 5 处：
 
-- `src-tauri/tauri.conf.json` → `version`（决定安装包名与更新版本比较）
-- `src-tauri/Cargo.toml` → `version`
-- `package.json` → `version`
+- `package.json` / `package-lock.json`（根 version）
+- `src-tauri/tauri.conf.json`（安装包名、应用版本与 updater 版本比较）
+- `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock`
+
+然后自动提交 `chore(release): <version>` 到 `main`，并把 tag 移到该提交；
+后续三个构建 job 都检出这个提交。因此 **不需要手工改版本**，tag / 代码 / 安装包 / `latest.json` 保持一致。
+
+> 本地预览（会直接改文件）：`node tools/sync-version.mjs v1.0.0-rc.2`
+> 发版前请确认 tag 基于最新 `main`；若 `main` 已前进，`prepare` 会报错并要求先同步。
 
 ### 触发 Release
 
-```powershell
-git add -A
-git commit -m "chore(release): 1.0.0-rc.2"
-git push origin main
-
+```bash
+# 方式一：打 tag（workflow 会自动同步版本并移动 tag 到版本提交）
 git tag v1.0.0-rc.2
-git push origin v1.0.0-rc.2   # 打 tag 即自动构建 + 发布
+git push origin v1.0.0-rc.2
+
+# 方式二：Actions → Release → Run workflow，填写 tag（可新建或复用已有 tag）
 ```
 
-或 Actions → **Release** → Run workflow：
-
-| 输入         | 说明                                                                  |
-| ------------ | --------------------------------------------------------------------- |
-| `tag`        | 如 `v1.0.0-rc.2`                                                      |
-| `prerelease` | 测试版勾选（不参与 `releases/latest`）                                |
-| `targets`    | `all` / `windows` / `android`：只跑一侧用于快速重试（例如只重打 APK） |
+| 输入         | 说明                                                               |
+| ------------ | ------------------------------------------------------------------ |
+| `tag`        | 如 `v1.0.0-rc.2`（必须基于最新 main）                              |
+| `prerelease` | 勾选后不参与 `releases/latest`，**不会触发自动更新**（仅做测试包） |
+| `targets`    | `all` / `windows` / `android` / `macos`：只跑一侧用于快速重试      |
 
 ### 产物
 
-| 文件                               | 说明                                                            |
-| ---------------------------------- | --------------------------------------------------------------- |
-| `Chatters_<version>_x64-setup.exe` | Windows NSIS 安装包（未签名前 SmartScreen 会提示）              |
-| `chatters.exe`                     | 绿色免安装版                                                    |
-| `Chatters-arm64-release.apk`       | Android arm64（release keystore 签名，首次安装需卸载 debug 包） |
-| `*.exe.sig`、`latest.json`         | Tauri 自动更新签名与清单（配置了签名密钥时生成）                |
-| `SHA256SUMS.txt`                   | 全部产物的 SHA-256                                              |
+| 文件                                                  | 说明                                                            |
+| ----------------------------------------------------- | --------------------------------------------------------------- |
+| `Chatters_<version>_x64-setup.exe`                    | Windows NSIS 安装包（未签名前 SmartScreen 会提示）              |
+| `chatters.exe`                                        | 绿色免安装版                                                    |
+| `Chatters-arm64-release.apk`                          | Android arm64（release keystore 签名，首次安装需卸载 debug 包） |
+| `Chatters-<version>-macos-universal.dmg` / `.app.zip` | macOS universal（未签名，首次打开需「仍要打开」）               |
+| `*.exe.sig`、`latest.json`                            | Tauri 自动更新签名与清单（配置了签名密钥时生成）                |
+| `SHA256SUMS.txt`                                      | 全部产物的 SHA-256                                              |
 
 ### 自动更新（桌面端）
 
@@ -223,6 +228,12 @@ git push origin v1.0.0-rc.2   # 打 tag 即自动构建 + 发布
 | ------------------------------------ | ------------------------------------- |
 | `TAURI_SIGNING_PRIVATE_KEY`          | `chatters-updater.key` 文件的全部内容 |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 该密钥的密码                          |
+
+> **prerelease 与更新**：GitHub 的 `/releases/latest` 不包含 pre-release；勾选 `prerelease`
+> 的发布不会被客户端看到，不会触发更新。要验证自动更新请**不勾选**（当前 rc.2 为 Latest）。
+>
+> **平台范围**：目前只有 Windows 生成 updater 产物（`.exe.sig` + `latest.json`）；
+> macOS 自动更新尚未接入（DMG 仅安装包，不含 updater 清单）。
 
 > 未配置 `TAURI_SIGNING_PRIVATE_KEY` 时，Release workflow 自动改用
 > `--config '{"bundle":{"createUpdaterArtifacts":false}}'` 构建普通安装包（不产出
